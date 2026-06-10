@@ -1,0 +1,111 @@
+# Eruku Korean Fine-tuning
+
+[Eruku](https://github.com/Blowing-Up-Groundhogs/Eruku) (autoregressive styled handwriting
+generation, [arxiv 2510.23240](https://arxiv.org/abs/2510.23240)) 를 **한글 손글씨 라인
+이미지 생성**으로 fine-tuning 하는 프로젝트.
+
+- 목표: 한글 + 영어 + 숫자 + 구두점/특수기호 혼합 **문장 line-text 이미지** 생성
+- 방식: 공식 영어 pretrained 에서 출발, 온라인 합성 데이터(폰트=writer)로 fine-tune
+- 모델: T5-large + ByT5 tokenizer(한글 byte 처리) + 동결 VAE(`emuru_vae`) + 동결 OrigamiNet(영어 OCR, `alpha=1.0` 으로 loss 미사용)
+
+## 빠른 시작 (새 머신)
+
+```bash
+git clone https://github.com/HERIUN/Eruku_korean_finetuning.git
+cd Eruku_korean_finetuning
+
+# 1. 환경 (uv)
+uv sync
+
+# 2. pretrained 체크포인트 다운로드 (~8.6 GB, HF)
+uv run python scripts/download_pretrained.py
+
+# 3. (선택) 데이터 파이프라인 sanity check — 학습 샘플 8개 저장
+uv run python korean_split_dataset.py --n 8 --style 1 8 --gen 1 32 --out /tmp/ksplit
+
+# 4. 학습 (Phase-2 스타일: style 1~8 / gen 1~32 어절, lr 1e-5)
+CUDA_VISIBLE_DEVICES=0 uv run python train_korean.py \
+  --online-split --style-words 1 8 --gen-words 1 32 \
+  --text-dropout 0.05 --style-text-dropout 0.10 \
+  --lr 1e-5 --batch-size 2 --max-steps 200000 \
+  --save-every 4000 --log-every 50 \
+  --save-samples 16 \
+  --out finetune_runs/korean_p2
+```
+
+첫 실행 시 HuggingFace 에서 `google-t5/t5-large`(config), `google/byt5-small`(tokenizer),
+`blowing-up-groundhogs/emuru_vae` 를 자동 다운로드하므로 인터넷이 필요합니다.
+
+### 이어 학습 (resume)
+
+```bash
+uv run python train_korean.py ... \
+  --resume finetune_runs/korean_p2/checkpoint_step_004000.pth --max-steps 200000
+```
+
+## 데이터 파이프라인 (온라인, 디스크 0)
+
+`korean_split_dataset.KoreanSplitFontSquare` = 원본 repo 의 `OnlineSplitFontSquare` 서브클래스.
+
+1. style/gen 텍스트를 **각각 다른 어절수 범위**로 샘플 (`MixedLineSampler`: 한글 0.55 / 영어 0.22 / 숫자 0.23 + 구두점·특수기호)
+2. 같은 폰트로 두 텍스트를 렌더 → concat → 증강(rotation, TPS warp, blur, 종이배경, ink jitter, dilation 등) → 폭 기준 split → `style_img` / `gen_img`
+3. 폰트 = writer 1명. `assets/fonts_korean_v2/train/` 61개 손글씨 폰트
+4. `fonts_charsets.json` 의 전 폰트 charset union 으로 tofu 방지
+
+논문 레시피 매핑:
+- `--text-dropout 0.05` = p_uncond (style+gen 텍스트 모두 drop → CFG 학습)
+- `--style-text-dropout 0.10` = p_drop (Phase 2 전용, style 텍스트만 drop)
+- Phase 1: `--style-words 2 4 --gen-words 2 4` / Phase 2: `--style-words 1 8 --gen-words 1 32`
+
+## 추론 / 시각화
+
+```bash
+# style ref 용 소규모 합성 세트 생성 (lines_json 포맷)
+uv run python gen_korean_fontset.py --per-font-train 5 --per-font-val 0 --out data/ref_set
+
+# 생성 결과 그리드: [스타일 ref | 정답 예시 | 생성 cfg=...]
+CUDA_VISIBLE_DEVICES=0 uv run python infer_show.py \
+  --ckpt finetune_runs/korean_p2/checkpoint_step_020000.pth \
+  --lines-json data/ref_set/train_lines.json \
+  --seed-text "오늘 날씨가 좋아서 친구와 공원에서 커피를 마셨다 2024년" \
+  --cfgs 1.0 1.25 1.5 1.75 2.0 --n-writers 4 --out _debug/show.png
+```
+
+## repo 구조
+
+```
+train_korean.py            # 학습 런처 (online-split / resume / dropout 옵션)
+korean_split_dataset.py    # 온라인 한글 split 데이터셋 (+ CLI 샘플 덤프)
+gen_korean_fontset.py      # 오프라인 라인 생성기 + MixedLineSampler/build_pools (공용)
+infer_show.py              # 자기설명적 결과 뷰어
+eruku_continuous_inf.py    # Emuru 모델 (forward/generate)
+custom_datasets/           # 원본 repo 데이터 코드 (font_square 렌더/증강, tps)
+models/                    # OrigamiNet 등
+assets/
+  fonts_korean_v2/train/   # 손글씨 폰트 61개 + fonts_charsets.json
+  fonts_label/             # NanumGothic (뷰어 라벨용)
+  backgrounds/             # 종이 배경
+  corpus/                  # korean_lines.json(한글 단어 풀) / chars.txt / english_words.txt
+scripts/download_pretrained.py
+```
+
+## 지금까지의 실험 요약 (2026-06 기준)
+
+| 실험 | 결과 |
+|---|---|
+| 공식 pretrained, 영어 생성 | 완벽 (문장 전체, in-style, EOG 정상) → 모델/추론 코드 정상 |
+| lr 5e-5 fine-tune (online split) | **발산** — mse 진동, 전 토큰 blank 붕괴 |
+| lr 1e-5 fine-tune 4K step | 안정 (loss 1.61→1.04). 영어 능력 보존 + 한글 폰트 style 적응 시작. 한글 glyph 는 아직 미생성 (숫자 조각부터 emerge) |
+
+핵심 인사이트:
+- **lr 1e-5 권장.** 5e-5 는 영어 init 에서 발산.
+- 한글 glyph 생성은 byte→glyph 매핑의 **신규 학습**이라 scale 필요 (논문 Phase2 = 10M 샘플). 4K step(8K 샘플)은 0.1% 미만 — 장기 학습 필수.
+- style ref 가 학습 분포(합성 폰트) 밖이면 생성이 붕괴(OOD). fine-tune 이 진행될수록 한글 폰트 prefix 에 적응.
+- 모델은 SOG 전까지 style 텍스트 나머지를 이어 그린 뒤(target 앞 echo) gen 텍스트를 그림 — 뷰어는 입력 style 폭만큼 잘라 보여주므로 echo 가 생성부 앞에 보일 수 있음.
+- 렌더가 깨지는 폰트 3종(NMFClassic, GangwonEduSaeeum, KCCPakKyongni)은 assets 에서 제거됨.
+
+## 요구 사양
+
+- CUDA GPU ≥ 24 GB (batch 2, max-img-len 2048 기준; T5-large 705M trainable)
+- 디스크: repo ~250 MB + 체크포인트 8.6 GB + 학습 ckpt 개당 ~8 GB
+- TPS C++ 백엔드는 선택 (`custom_datasets/font_square/tps/build.sh`, `uv sync --extra tps` 후) — 없으면 NumPy fallback 으로 동작

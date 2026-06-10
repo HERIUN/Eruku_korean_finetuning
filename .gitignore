@@ -1,0 +1,23 @@
+# env
+.venv/
+__pycache__/
+*.pyc
+
+# 대용량 체크포인트 (scripts/download_pretrained.py 로 받기)
+model_zoo/
+files/checkpoints/
+
+# 학습 산출물
+finetune_runs/
+data/
+_debug/
+*.log
+
+# tps 빌드 산출물
+custom_datasets/font_square/tps/build/
+custom_datasets/font_square/tps/*.egg-info/
+custom_datasets/font_square/tps/eigen-3.4.0/
+
+# misc
+.DS_Store
+nohup.out

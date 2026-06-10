@@ -1,0 +1,29 @@
+[project]
+name = "eruku-korean-finetuning"
+version = "0.1.0"
+description = "Eruku (autoregressive styled handwriting generation) Korean fine-tuning"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "torch==2.9.0",
+    "torchvision==0.24.0",
+    "transformers>=5.5,<6",
+    "diffusers>=0.32",
+    "einops>=0.8",
+    "numpy>=2.0,<3",
+    "opencv-python-headless>=4.10",
+    "pillow>=10",
+    "fonttools>=4.50",
+    "msgpack>=1.0",
+    "nltk>=3.9",
+    "tqdm>=4.66",
+    "huggingface-hub>=0.34",
+    "accelerate>=1.0",
+    "safetensors>=0.4",
+]
+
+[project.optional-dependencies]
+# TPS C++ 가속 백엔드 빌드용 (없어도 NumPy fallback 으로 학습 가능)
+tps = ["pybind11>=2.12", "setuptools>=70"]
+
+[tool.uv]
+# torch GPU(cu12) wheel 은 PyPI 기본 인덱스에서 제공됨

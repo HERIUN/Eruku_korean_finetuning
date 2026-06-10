@@ -1,0 +1,267 @@
+"""Eruku 한글화 minimal training launcher.
+
+- Emuru 모델 (T5-base + VAE + OrigamiNet)
+- ByT5 tokenizer (한글 byte 자동 처리)
+- VAE: `blowing-up-groundhogs/emuru_vae` (HF, download)
+- T5: from-scratch (영어 pretrained 안 받음)
+- OrigamiNet: alpha=1.0 → ocr_loss 사용 안 함 → 한글에서도 동작
+
+Usage:
+  python train_korean.py --lines-json ../font_ai_pipeline_work/benchmark/train_lines.json --out finetune_runs/korean --max-steps 20000
+"""
+from __future__ import annotations
+
+import argparse
+import random
+import sys
+import time
+from pathlib import Path
+
+import torch
+from torch.utils.data import DataLoader
+
+HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE))
+
+import importlib.util as _ilu
+_spec = _ilu.spec_from_file_location(
+    "_handb_korean",
+    HERE / "custom_datasets" / "real_datasets" / "handb_korean.py",
+)
+_mod = _ilu.module_from_spec(_spec)
+_spec.loader.exec_module(_mod)
+HanDBKoreanDataset = _mod.HanDBKoreanDataset
+handb_collate = _mod.handb_collate
+
+from eruku_continuous_inf import Emuru
+
+
+def parse_args():
+    p = argparse.ArgumentParser()
+    p.add_argument("--lines-json", default=None, help="offline lines_json (online-split 시 불필요)")
+    p.add_argument("--out", default="finetune_runs/korean")
+    p.add_argument("--vae-checkpoint", default="blowing-up-groundhogs/emuru_vae")
+    p.add_argument("--t5-checkpoint", default="google-t5/t5-large")
+    p.add_argument("--eruku-pretrained", default="model_zoo/eruku_pretrained/000073688.pth",
+                   help="영어 학습 Eruku full ckpt — strict=False 로 로드")
+    p.add_argument("--max-steps", type=int, default=20000)
+    p.add_argument("--save-every", type=int, default=2000)
+    p.add_argument("--log-every", type=int, default=50)
+    p.add_argument("--batch-size", type=int, default=2)
+    p.add_argument("--lr", type=float, default=5e-5)
+    p.add_argument("--max-img-len", type=int, default=2048)
+    p.add_argument("--num-workers", type=int, default=2)
+    p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    p.add_argument("--ocr-checkpoint", default=None, help="OrigamiNet ckpt (none → 기본 위치)")
+    p.add_argument("--seed", type=int, default=42)
+    p.add_argument("--text-dropout", type=float, default=0.1,
+                   help="학습 중 text 를 uncond 로 drop 할 확률 (>0 이어야 inference CFG 동작)")
+    p.add_argument("--resume", default=None,
+                   help="체크포인트에서 이어 학습 (model+optimizer+step 복원, eruku-pretrained 무시)")
+    p.add_argument("--content-weight", type=float, default=0.0,
+                   help="ko-trocr content loss 가중치 (0=off). 생성이미지를 목표텍스트로 읽히게 감독")
+    p.add_argument("--content-model", default="ddobokki/ko-trocr")
+    p.add_argument("--content-every", type=int, default=1,
+                   help="N step 마다 content loss 적용 (비용 절감)")
+    p.add_argument("--style-text-dropout", type=float, default=0.0,
+                   help="논문 p_drop (Phase2): style text(T_s)만 비울 확률. gen text 는 유지. 논문 0.10")
+    p.add_argument("--online-split", action="store_true",
+                   help="repo OnlineSplitFontSquare 온라인 한글 split 데이터 사용 (lines-json 대신)")
+    p.add_argument("--style-words", nargs=2, type=int, default=[1, 8], help="online: style 어절수 범위")
+    p.add_argument("--gen-words", nargs=2, type=int, default=[1, 32], help="online: gen(target) 어절수 범위")
+    p.add_argument("--save-samples", type=int, default=0, help="학습 시작 시 데이터 샘플 N개 저장")
+    return p.parse_args()
+
+
+def main():
+    args = parse_args()
+    torch.manual_seed(args.seed)
+
+    out_dir = Path(args.out)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    device = torch.device(args.device)
+
+    # ── dataset ──
+    if args.online_split:
+        from korean_split_dataset import make_dataset, split_collate, dump_samples
+        dataset = make_dataset(style_range=tuple(args.style_words),
+                               gen_range=tuple(args.gen_words),
+                               length=args.max_steps * args.batch_size, seed=args.seed)
+        if args.save_samples > 0:
+            dump_samples(dataset, args.save_samples, out_dir / "train_samples")
+        collate = split_collate
+    else:
+        dataset = HanDBKoreanDataset(args.lines_json, img_height=64, batch_keys=["style", "same"])
+        collate = handb_collate
+    loader = DataLoader(
+        dataset, batch_size=args.batch_size, shuffle=True,
+        num_workers=args.num_workers, collate_fn=collate, drop_last=True,
+    )
+
+    # ── model ──
+    # OrigamiNet 영어 ckpt 가 한글에 무용 → 일단 dummy 경로 (없으면 init 자체가 안 될 수 있음 확인)
+    if args.ocr_checkpoint is None:
+        # Eruku __init__ 에서 OrigamiNet.from_checkpoint 호출 — 없으면 fail
+        # → Origami_bw_img/origami.pth 영어 ckpt 있는지 확인
+        candidate = HERE / "files" / "checkpoints" / "Origami_bw_img" / "origami.pth"
+        if candidate.exists():
+            args.ocr_checkpoint = str(candidate)
+            print(f"using OCR ckpt (영어, but only loaded — alpha=1 disables 사용): {candidate}")
+        else:
+            raise FileNotFoundError(
+                f"OrigamiNet ckpt not found at {candidate}. "
+                "Eruku 클래스가 from_checkpoint 호출하므로 임의 파일이라도 필요. "
+                "혹은 Eruku 클래스 수정 (ocr None 허용)."
+            )
+
+    model = Emuru(
+        t5_checkpoint=args.t5_checkpoint,
+        vae_checkpoint=args.vae_checkpoint,
+        ocr_checkpoint=args.ocr_checkpoint,
+    ).to(device)
+    model.alpha = 1.0  # ocr_loss off
+    # text-dropout 켜서 CFG 가능하게 (원본 Emuru 레시피). 이게 없으면 generate() 의
+    # CFG 가 no-op (uncond==cond) 이라 inference 에서 텍스트를 강하게 못 따라감.
+    model.dropout_probability = args.text_dropout
+    model.drop_text = args.text_dropout > 0
+    print(f"text-dropout: prob={model.dropout_probability} drop_text={model.drop_text}")
+    model.set_training(model.T5, True)
+    model.set_training(model.vae, False)
+    model.set_training(model.ocr, False)
+
+    # 영어 학습 Eruku ckpt 로드 (strict=False). resume 시엔 건너뜀(resume ckpt 가 모델).
+    if not args.resume and args.eruku_pretrained and Path(args.eruku_pretrained).exists():
+        print(f"loading pretrained: {args.eruku_pretrained}")
+        ckpt = torch.load(args.eruku_pretrained, map_location="cpu", weights_only=False)
+        state = ckpt["model"] if "model" in ckpt else ckpt
+        if any(k.startswith("module.") for k in state):
+            state = {k[len("module."):]: v for k, v in state.items()}
+        missing, unexpected = model.load_state_dict(state, strict=False)
+        print(f"  missing={len(missing)}, unexpected={len(unexpected)}")
+        if missing[:3]:
+            print(f"  missing sample: {missing[:3]}")
+        del ckpt, state
+
+    n_trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    print(f"trainable params: {n_trainable/1e6:.1f}M")
+
+    optimizer = torch.optim.AdamW(
+        (p for p in model.parameters() if p.requires_grad),
+        lr=args.lr, weight_decay=1e-2,
+    )
+
+    start_step = 0
+    if args.resume and Path(args.resume).exists():
+        print(f"resuming from: {args.resume}")
+        rck = torch.load(args.resume, map_location="cpu", weights_only=False)
+        rstate = rck["model"] if "model" in rck else rck
+        if any(k.startswith("module.") for k in rstate):
+            rstate = {k[len("module."):]: v for k, v in rstate.items()}
+        m, u = model.load_state_dict(rstate, strict=False)
+        print(f"  model missing={len(m)} unexpected={len(u)}")
+        if "optimizer" in rck:
+            try:
+                optimizer.load_state_dict(rck["optimizer"])
+                print("  optimizer state restored")
+            except Exception as e:
+                print(f"  optimizer restore 실패(무시): {e}")
+        start_step = int(rck.get("step", 0))
+        print(f"  resume step={start_step} (→ max-steps {args.max_steps})")
+        del rck, rstate
+
+    content_fn = None
+    if args.content_weight > 0:
+        from ko_trocr_loss import KoTrOCRContentLoss
+        print(f"loading content loss model: {args.content_model}")
+        content_fn = KoTrOCRContentLoss(args.content_model, device=str(device))
+        print(f"content loss ON: weight={args.content_weight} every={args.content_every}")
+
+    model.train()
+    step = start_step
+    skipped = 0
+    t0 = time.time()
+    last_log = t0
+    losses_window = []
+
+    while step < args.max_steps:
+        for sample in loader:
+            if step >= args.max_steps:
+                break
+
+            # sample = list 들 (handb_collate)
+            try:
+                model_inputs = model.get_model_inputs(
+                    sample["style_img"], sample["same_img"],
+                    sample["style_img_len"], sample["same_img_len"],
+                    args.max_img_len,
+                )
+            except Exception as e:
+                print(f"[step {step}] get_model_inputs ERR: {e}")
+                continue
+
+            decoder_inputs_embeds_vae = model_inputs["decoder_inputs_embeds"].to(device)
+            specials = model_inputs["specials"].to(device)
+
+            # forward 의 specials/embeds seq 길이가 batch 에 따라 1 어긋나는
+            # 간헐 shape 버그가 있어 (eruku forward 내부) 드문 malformed batch 는 skip.
+            try:
+                # style-text dropout (논문 p_drop, Phase2): style text(T_s)만 비움, gen text(T_g) 유지
+                style_text = sample["style_text"]
+                if args.style_text_dropout > 0:
+                    style_text = ["" if random.random() < args.style_text_dropout else s
+                                  for s in style_text]
+                out = model.forward(
+                    decoder_inputs_embeds_vae=decoder_inputs_embeds_vae,
+                    specials=specials,
+                    style_text=style_text,
+                    gen_text=sample["same_text"],
+                )
+                losses, pred_latent = out
+                loss = losses["loss"]
+                mse = losses["mse_loss"]
+                ce = losses["ce_loss"]
+                ocr = losses["ocr_loss"]
+
+                # ── content loss (ko-trocr): 생성 이미지 vs 원본 이미지 OCR-feature MSE ──
+                cl_val = 0.0
+                if content_fn is not None and step % args.content_every == 0:
+                    pred_img = model.vae.decode(pred_latent).sample          # 동결 VAE → grad 통과
+                    gt_latent = model.z_rearrange(decoder_inputs_embeds_vae)  # GT latent 같은 방향으로
+                    gt_img = model.vae.decode(gt_latent).sample              # 원본 이미지 (target)
+                    content = content_fn(pred_img, gt_img)
+                    loss = loss + args.content_weight * content
+                    cl_val = content.item()
+
+                optimizer.zero_grad(set_to_none=True)
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                optimizer.step()
+            except Exception as e:
+                optimizer.zero_grad(set_to_none=True)
+                skipped += 1
+                print(f"[step {step}] forward/backward SKIP ({skipped} total): {e}")
+                continue
+
+            losses_window.append(loss.item())
+            step += 1
+
+            if step % args.log_every == 0:
+                avg = sum(losses_window[-args.log_every:]) / min(len(losses_window), args.log_every)
+                ips = args.log_every / (time.time() - last_log + 1e-9)
+                last_log = time.time()
+                print(f"step {step}/{args.max_steps}  loss={avg:.4f}  mse={mse.item():.4f}"
+                      f"  ce={ce.item():.4f}  content={cl_val:.4f}  {ips:.1f} it/s")
+
+            if args.save_every > 0 and step % args.save_every == 0:
+                ckpt = {"model": model.state_dict(), "optimizer": optimizer.state_dict(), "step": step}
+                p = out_dir / f"checkpoint_step_{step:06d}.pth"
+                torch.save(ckpt, p)
+                print(f"  saved {p}")
+
+    final = out_dir / "checkpoint_last.pth"
+    torch.save({"model": model.state_dict(), "step": step}, final)
+    print(f"done. saved {final}  total {(time.time()-t0)/60:.1f} min")
+
+
+if __name__ == "__main__":
+    main()
