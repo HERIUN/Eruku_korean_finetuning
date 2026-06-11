@@ -44,7 +44,7 @@ class KoreanSplitFontSquare(OnlineSplitFontSquare):
 
 def build_samplers(style_range, gen_range, n_english=8000, seed=42):
     rng = random.Random(seed)
-    pools = G.build_pools(ASSETS / "corpus/korean_lines.json",
+    pools = G.build_pools(ASSETS / "corpus/korean_lines.txt",
                           ASSETS / "corpus/chars.txt",
                           str(ASSETS / "corpus/english_words.txt"), n_english, rng)
     cs = json.load(open(ASSETS / "fonts_korean_v2/train/fonts_charsets.json"))

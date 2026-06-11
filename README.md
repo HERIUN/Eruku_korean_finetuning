@@ -126,7 +126,7 @@ assets/
   fonts_korean_v2/train/   # 손글씨 폰트 61개 + fonts_charsets.json
   fonts_label/             # NanumGothic (뷰어 라벨용)
   backgrounds/             # 종이 배경
-  corpus/                  # korean_lines.json(한글 단어 풀) / chars.txt / english_words.txt
+  corpus/                  # korean_lines.txt(한 줄당 한 문장) / chars.txt / english_words.txt
 ```
 
 ## 지금까지의 실험 요약 (2026-06 기준)
