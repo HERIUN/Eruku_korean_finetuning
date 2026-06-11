@@ -36,12 +36,22 @@ CUDA_VISIBLE_DEVICES=0 uv run python train_korean.py \
 인터넷이 필요합니다. OrigamiNet OCR ckpt 는 불필요 (alpha=1.0 → OCR loss 미사용,
 공식 HF 릴리즈에도 OCR 모듈 없음).
 
+### 학습 산출물 (`--out` 디렉토리)
+
+- `train_config.yml` — 실행마다 전체 인자+타임스탬프가 **run 히스토리**로 누적 기록
+- `train_loss.csv` — `step,loss,mse,ce,it_s,timestamp` (log-every 마다, resume 시 이어 씀)
+- `checkpoint_step_XXXXXX.pth` — model + optimizer + step (resume 용)
+- `train_samples/` — `--save-samples N` 지정 시 학습 데이터 샘플 + montage
+
 ### 이어 학습 (resume)
 
 ```bash
 uv run python train_korean.py ... \
   --resume finetune_runs/korean_p2/checkpoint_step_004000.pth --max-steps 200000
 ```
+
+resume 시 이전 run 의 `train_config.yml` 과 인자가 다르면 `[config WARN]` 으로 알려줍니다
+(lr/batch 등 바뀐 채 이어 학습하는 실수 방지).
 
 ## 데이터 파이프라인 (온라인, 디스크 0)
 

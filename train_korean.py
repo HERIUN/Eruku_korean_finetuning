@@ -12,12 +12,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import datetime
 import random
 import sys
 import time
 from pathlib import Path
 
 import torch
+import yaml
 from torch.utils.data import DataLoader
 
 HERE = Path(__file__).resolve().parent
@@ -60,11 +62,6 @@ def parse_args():
                    help="학습 중 text 를 uncond 로 drop 할 확률 (>0 이어야 inference CFG 동작)")
     p.add_argument("--resume", default=None,
                    help="체크포인트에서 이어 학습 (model+optimizer+step 복원, eruku-pretrained 무시)")
-    p.add_argument("--content-weight", type=float, default=0.0,
-                   help="ko-trocr content loss 가중치 (0=off). 생성이미지를 목표텍스트로 읽히게 감독")
-    p.add_argument("--content-model", default="ddobokki/ko-trocr")
-    p.add_argument("--content-every", type=int, default=1,
-                   help="N step 마다 content loss 적용 (비용 절감)")
     p.add_argument("--style-text-dropout", type=float, default=0.0,
                    help="논문 p_drop (Phase2): style text(T_s)만 비울 확률. gen text 는 유지. 논문 0.10")
     p.add_argument("--online-split", action="store_true",
@@ -82,6 +79,22 @@ def main():
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device(args.device)
+
+    # ── run config 기록: train_config.yml 에 run 히스토리 누적 ──
+    cfg_path = out_dir / "train_config.yml"
+    runs = (yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or []) if cfg_path.exists() else []
+    cur = {k: (list(v) if isinstance(v, tuple) else v) for k, v in vars(args).items()}
+    if args.resume and runs:                      # resume 인데 파라미터가 달라지면 경고
+        prev = runs[-1]["args"]
+        for k in cur:
+            if k not in ("resume", "max_steps") and prev.get(k) != cur[k]:
+                print(f"[config WARN] resume 인데 '{k}' 가 이전 run 과 다름: {prev.get(k)!r} -> {cur[k]!r}")
+    runs.append({"run": len(runs) + 1,
+                 "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                 "torch": str(torch.__version__),
+                 "args": cur})
+    cfg_path.write_text(yaml.safe_dump(runs, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    print(f"config logged: {cfg_path} (run #{len(runs)})")
 
     # ── dataset ──
     if args.online_split:
@@ -164,12 +177,12 @@ def main():
         print(f"  resume step={start_step} (→ max-steps {args.max_steps})")
         del rck, rstate
 
-    content_fn = None
-    if args.content_weight > 0:
-        from ko_trocr_loss import KoTrOCRContentLoss
-        print(f"loading content loss model: {args.content_model}")
-        content_fn = KoTrOCRContentLoss(args.content_model, device=str(device))
-        print(f"content loss ON: weight={args.content_weight} every={args.content_every}")
+    # ── loss 로그: train_loss.csv (append, resume 시 이어 씀) ──
+    loss_csv = out_dir / "train_loss.csv"
+    loss_f = open(loss_csv, "a", buffering=1)
+    if loss_f.tell() == 0:
+        loss_f.write("step,loss,mse,ce,it_s,timestamp\n")
+    print(f"loss logged: {loss_csv}")
 
     model.train()
     step = start_step
@@ -215,17 +228,6 @@ def main():
                 loss = losses["loss"]
                 mse = losses["mse_loss"]
                 ce = losses["ce_loss"]
-                ocr = losses["ocr_loss"]
-
-                # ── content loss (ko-trocr): 생성 이미지 vs 원본 이미지 OCR-feature MSE ──
-                cl_val = 0.0
-                if content_fn is not None and step % args.content_every == 0:
-                    pred_img = model.vae.decode(pred_latent).sample          # 동결 VAE → grad 통과
-                    gt_latent = model.z_rearrange(decoder_inputs_embeds_vae)  # GT latent 같은 방향으로
-                    gt_img = model.vae.decode(gt_latent).sample              # 원본 이미지 (target)
-                    content = content_fn(pred_img, gt_img)
-                    loss = loss + args.content_weight * content
-                    cl_val = content.item()
 
                 optimizer.zero_grad(set_to_none=True)
                 loss.backward()
@@ -245,7 +247,9 @@ def main():
                 ips = args.log_every / (time.time() - last_log + 1e-9)
                 last_log = time.time()
                 print(f"step {step}/{args.max_steps}  loss={avg:.4f}  mse={mse.item():.4f}"
-                      f"  ce={ce.item():.4f}  content={cl_val:.4f}  {ips:.1f} it/s")
+                      f"  ce={ce.item():.4f}  {ips:.1f} it/s")
+                loss_f.write(f"{step},{avg:.6f},{mse.item():.6f},{ce.item():.6f},"
+                             f"{ips:.2f},{datetime.datetime.now().isoformat(timespec='seconds')}\n")
 
             if args.save_every > 0 and step % args.save_every == 0:
                 ckpt = {"model": model.state_dict(), "optimizer": optimizer.state_dict(), "step": step}
@@ -255,6 +259,7 @@ def main():
 
     final = out_dir / "checkpoint_last.pth"
     torch.save({"model": model.state_dict(), "step": step}, final)
+    loss_f.close()
     print(f"done. saved {final}  total {(time.time()-t0)/60:.1f} min")
 
 
