@@ -19,6 +19,7 @@ ASSETS = HERE / "assets"
 sys.path.insert(0, str(HERE))
 import gen_korean_fontset as G
 from custom_datasets.font_square.font_square_split import OnlineSplitFontSquare
+from custom_datasets.font_square import font_transforms_split as FT
 
 
 class KoreanSplitFontSquare(OnlineSplitFontSquare):
@@ -27,6 +28,12 @@ class KoreanSplitFontSquare(OnlineSplitFontSquare):
         super().__init__(fonts, backgrounds, text_sampler=style_sampler, **kw)
         self.style_sampler = style_sampler
         self.gen_sampler = gen_sampler
+        # RandomInvert 는 bg_patch 반전인데 합성이 곱셈(img = text*bg)이라
+        # 밝은 종이 배경(≈1)이 반전되면 이미지 전체가 ≈0 (새까만 무정보 샘플).
+        # 원본 font-square 의 컬러 배경에서만 유효한 증강 → 비활성화.
+        for t in self.transform.transforms:
+            if isinstance(t, FT.RandomInvert):
+                t.p = 0.0
 
     def __getitem__(self, font_id):
         font_id = font_id % self.renderers_length
