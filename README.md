@@ -20,15 +20,42 @@ uv sync
 # 2. (선택) 데이터 파이프라인 sanity check — 학습 샘플 8개 저장
 uv run python korean_split_dataset.py --n 8 --style 1 8 --gen 1 32 --out /tmp/ksplit
 
-# 3. 학습 (Phase-2 스타일: style 1~8 / gen 1~32 어절, lr 1e-5)
+# 3-A. 한글 Phase 1 — 한글 glyph 본 학습 (짧은 2~4 어절 pair)
+#      virtual 256 = batch 16 × accum 16, lr 1e-4, wd 1e-2 (논문 레시피)
+CUDA_VISIBLE_DEVICES=0 uv run python train_korean.py \
+  --online-split --style-words 2 4 --gen-words 2 4 \
+  --text-dropout 0.05 \
+  --batch-size 16 --grad-accum 16 --lr 1e-4 \
+  --max-steps 20000 --save-every 1000 --log-every 10 \
+  --save-samples 16 \
+  --out finetune_runs/korean_p1
+
+# 3-B. 한글 Phase 2 — 긴 줄 일반화 (Phase 1 ckpt 에서 resume)
+#      논문 그대로: batch 2 × accum 128 = virtual 256, 5000 iter
 CUDA_VISIBLE_DEVICES=0 uv run python train_korean.py \
   --online-split --style-words 1 8 --gen-words 1 32 \
   --text-dropout 0.05 --style-text-dropout 0.10 \
-  --lr 1e-5 --batch-size 2 --max-steps 200000 \
-  --save-every 4000 --log-every 50 \
-  --save-samples 16 \
+  --batch-size 2 --grad-accum 128 --lr 1e-4 \
+  --max-steps 5000 --save-every 250 --log-every 10 \
+  --resume finetune_runs/korean_p1/checkpoint_last.pth \
   --out finetune_runs/korean_p2
 ```
+
+왜 두 단계인가: 논문에서 **Phase 1 (65000 iter × 256 = 16.6M 샘플, 짧은 단어쌍)** 이
+byte→glyph 매핑을 만들고, **Phase 2 (5000 iter = 1.28M, 긴 줄)** 는 길이 일반화만 담당.
+한글 glyph 는 영어 pretrained 에 없는 **신규 능력**이라 Phase-1 형태(짧은 샘플 = 같은
+시간에 더 많은 glyph 감독)로 먼저 가르치는 것이 효율적. 단 from-scratch 는 불필요 —
+VAE-latent 디코딩·자기회귀·style 메커니즘은 영어 pretrained 에서 전이됨.
+
+- `--max-steps` / `--save-every` / `--log-every` 는 **virtual step**(optimizer 업데이트) 기준
+- 노출량: Phase 1 20K step = 5.1M 샘플 (논문 65K 의 1/3 — 영어 전이 가정, 생성 보며 연장),
+  Phase 2 5000 step = 1.28M (논문과 동일). 논문은 10M 고정 데이터셋에서 1.28M 만 썼지만
+  우리는 온라인 무한 생성이라 모든 샘플 unique (resume 시에도 seed offset 으로 중복 방지)
+- 24GB 기준 측정 속도: Phase 1 (batch16) virtual step ~10s → 20K ≈ 55h,
+  Phase 2 (batch2) virtual step ~44s → 5K ≈ 60h
+- 빠른 sanity check (accumulation 없이): `--grad-accum 1 --lr 1e-5 --max-steps 4000`
+  — **주의: virtual batch 가 작으면 lr 도 낮춰야 함** (batch 2 + lr 5e-5 발산 확인됨,
+  논문 lr 1e-4 는 virtual 256 기준)
 
 첫 실행 시 HuggingFace 에서 `google-t5/t5-large`(config), `google/byt5-small`(tokenizer),
 `blowing-up-groundhogs/emuru_vae`, 그리고 **영어 pretrained weight**
@@ -66,6 +93,10 @@ resume 시 이전 run 의 `train_config.yml` 과 인자가 다르면 `[config WA
 - `--text-dropout 0.05` = p_uncond (style+gen 텍스트 모두 drop → CFG 학습)
 - `--style-text-dropout 0.10` = p_drop (Phase 2 전용, style 텍스트만 drop)
 - Phase 1: `--style-words 2 4 --gen-words 2 4` / Phase 2: `--style-words 1 8 --gen-words 1 32`
+- virtual batch 256: `--grad-accum` × `--batch-size` = 256 (논문 lr 1e-4 는 이 기준)
+- 논문 iteration: Phase 1 = 65000 (16.6M 샘플), Phase 2 = 5000 (1.28M 샘플)
+- target 패딩 = visual `<EOG>`: 이미 구현되어 있음 — specials 패딩값 1(=EOG) +
+  forward 에서 EOG embedding 치환 + CE 로 "gen 종료 후엔 EOG 만" 학습
 
 ## 추론 / 시각화
 

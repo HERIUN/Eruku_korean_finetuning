@@ -51,6 +51,10 @@ def parse_args():
     p.add_argument("--save-every", type=int, default=2000)
     p.add_argument("--log-every", type=int, default=50)
     p.add_argument("--batch-size", type=int, default=2)
+    p.add_argument("--grad-accum", type=int, default=1,
+                   help="gradient accumulation 횟수. virtual batch = batch-size × grad-accum. "
+                        "논문: virtual 256 (예: batch 2 × accum 128) + lr 1e-4. "
+                        "max-steps/save-every/log-every 는 virtual step 기준")
     p.add_argument("--lr", type=float, default=5e-5)
     p.add_argument("--max-img-len", type=int, default=2048)
     p.add_argument("--num-workers", type=int, default=2)
@@ -99,9 +103,19 @@ def main():
     # ── dataset ──
     if args.online_split:
         from korean_split_dataset import make_dataset, split_collate, dump_samples
+        # 온라인 무한 생성 = 매 샘플이 새로 렌더됨 (중복 0, 사실상 무한 데이터셋).
+        # resume 시 같은 seed 면 처음 본 샘플을 다시 보게 되므로 ckpt 파일명의
+        # step 을 seed offset 으로 사용해 항상 새 샘플을 보장.
+        seed_off = 0
+        if args.resume:
+            digits = "".join(c for c in Path(args.resume).stem if c.isdigit())
+            seed_off = int(digits) if digits else 1
         dataset = make_dataset(style_range=tuple(args.style_words),
                                gen_range=tuple(args.gen_words),
-                               length=args.max_steps * args.batch_size, seed=args.seed)
+                               length=args.max_steps * args.batch_size * max(1, args.grad_accum),
+                               seed=args.seed + seed_off)
+        if seed_off:
+            print(f"online data seed: {args.seed} + offset {seed_off} (resume, 샘플 중복 방지)")
         if args.save_samples > 0:
             dump_samples(dataset, args.save_samples, out_dir / "train_samples")
         collate = split_collate
@@ -190,6 +204,11 @@ def main():
     t0 = time.time()
     last_log = t0
     losses_window = []
+    accum = max(1, args.grad_accum)
+    micro = 0          # 현재 virtual step 안에서 누적한 micro-batch 수
+    acc_loss = 0.0     # virtual step 의 평균 loss 집계용
+    print(f"virtual batch = {args.batch_size} x {accum} = {args.batch_size * accum}")
+    optimizer.zero_grad(set_to_none=True)
 
     while step < args.max_steps:
         for sample in loader:
@@ -229,17 +248,27 @@ def main():
                 mse = losses["mse_loss"]
                 ce = losses["ce_loss"]
 
-                optimizer.zero_grad(set_to_none=True)
-                loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-                optimizer.step()
+                (loss / accum).backward()   # gradient accumulation
             except Exception as e:
+                # 누적 중 실패 → 부분 누적 폐기 (virtual batch 통째로 drop)
                 optimizer.zero_grad(set_to_none=True)
+                micro = 0
+                acc_loss = 0.0
                 skipped += 1
                 print(f"[step {step}] forward/backward SKIP ({skipped} total): {e}")
                 continue
 
-            losses_window.append(loss.item())
+            acc_loss += loss.item()
+            micro += 1
+            if micro < accum:
+                continue                    # 아직 virtual batch 미완성
+
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            optimizer.step()
+            optimizer.zero_grad(set_to_none=True)
+            losses_window.append(acc_loss / accum)
+            micro = 0
+            acc_loss = 0.0
             step += 1
 
             if step % args.log_every == 0:
