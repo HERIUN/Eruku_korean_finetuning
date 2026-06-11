@@ -98,17 +98,20 @@ def gen_number(rng: random.Random) -> str:
 
 
 class MixedLineSampler:
-    """ko/en/num 토큰을 가중치로 섞고 구두점·특수기호를 입힌 라인 생성.
-    폰트가 커버하는 글자(covered_cps)만 사용."""
+    """ko/en/num/rand 토큰을 가중치로 섞고 구두점·특수기호를 입힌 라인 생성.
+    폰트가 커버하는 글자(covered_cps)만 사용.
+    rand = 랜덤 음절 조합 가짜 단어 (논문의 'random words' 대응) — 코퍼스
+    빈도 편향 없이 모든 음절을 단어 맥락으로 균등 노출."""
 
     def __init__(self, ko, en, covered_cps, weights, min_words, max_words,
-                 max_chars, punct_prob, special_prob, rng):
+                 max_chars, punct_prob, special_prob, rng, rand_syllables=None):
         self.ko, self.en, self.cps = ko, en, covered_cps
+        self.rand = rand_syllables or []
         self.min_words, self.max_words = min_words, max_words
         self.max_chars, self.rng = max_chars, rng
         self.punct_prob, self.special_prob = punct_prob, special_prob
-        avail = {"ko": ko, "en": en, "num": True}
-        self.cats = [c for c in ("ko", "en", "num")
+        avail = {"ko": ko, "en": en, "num": True, "rand": self.rand}
+        self.cats = [c for c in ("ko", "en", "num", "rand")
                      if weights.get(c, 0) > 0 and avail[c]]
         self.cw = [weights[c] for c in self.cats]
         self.trail = [p for p in PUNCT_TRAIL if ord(p) in covered_cps]
@@ -125,6 +128,9 @@ class MixedLineSampler:
             return self.rng.choice(self.ko)
         if cat == "en":
             return self.rng.choice(self.en)
+        if cat == "rand":   # 랜덤 음절 1~4글자 (2~3글자 위주)
+            n = self.rng.choices((1, 2, 3, 4), (0.15, 0.35, 0.30, 0.20))[0]
+            return "".join(self.rng.choice(self.rand) for _ in range(n))
         for _ in range(4):
             t = gen_number(self.rng)
             if self._covered(t):
@@ -277,7 +283,8 @@ def list_fonts(d: Path) -> list[Path]:
 def gen_split(fonts: list[Path], pools: dict, bgs: list[np.ndarray],
               out_img_dir: Path, per_font: int, args, rng: random.Random) -> list[dict]:
     rows: list[dict] = []
-    weights = {"ko": args.w_ko, "en": args.w_en, "num": args.w_num}
+    weights = {"ko": args.w_ko, "en": args.w_en, "num": args.w_num,
+               "rand": getattr(args, "w_rand", 0.0)}
     for fi, fp in enumerate(fonts):
         person_key = fp.stem
         try:
@@ -292,9 +299,11 @@ def gen_split(fonts: list[Path], pools: dict, bgs: list[np.ndarray],
         if len(ko_cov) < args.min_words:
             print(f"  [skip] {fp.name}: ko 커버 {len(ko_cov)} < {args.min_words}")
             continue
+        syls = sorted(chr(c) for c in covered_cps if 0xAC00 <= c <= 0xD7A3)
         sampler = MixedLineSampler(ko_cov, en_cov, covered_cps, weights,
                                    args.min_words_per_line, args.max_words_per_line,
-                                   args.max_chars, args.punct_prob, args.special_prob, rng)
+                                   args.max_chars, args.punct_prob, args.special_prob, rng,
+                                   rand_syllables=syls)
         fdir = out_img_dir / person_key
         fdir.mkdir(parents=True, exist_ok=True)
         made = 0
@@ -364,6 +373,8 @@ def main():
     ap.add_argument("--w-ko", type=float, default=0.55, help="라인 토큰 중 한글 비중")
     ap.add_argument("--w-en", type=float, default=0.22, help="영어 비중")
     ap.add_argument("--w-num", type=float, default=0.23, help="숫자 비중")
+    ap.add_argument("--w-rand", type=float, default=0.0,
+                    help="랜덤 음절 가짜단어 비중 (오프라인 ref set 은 기본 0; 온라인 학습은 0.15)")
     ap.add_argument("--punct-prob", type=float, default=0.35, help="토큰에 구두점 붙일 확률")
     ap.add_argument("--special-prob", type=float, default=0.08, help="특수기호 단독 삽입 확률")
     ap.add_argument("--seed", type=int, default=42)

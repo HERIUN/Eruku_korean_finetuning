@@ -48,13 +48,20 @@ def build_samplers(style_range, gen_range, n_english=8000, seed=42):
                           ASSETS / "corpus/chars.txt",
                           str(ASSETS / "corpus/english_words.txt"), n_english, rng)
     cs = json.load(open(ASSETS / "fonts_korean_v2/train/fonts_charsets.json"))
-    cps = set()
+    cps, inter = set(), None
     for s in cs.values():
-        cps |= {ord(c) for c in s}
-    w = {"ko": 0.55, "en": 0.22, "num": 0.23}
-    style_s = G.MixedLineSampler(pools["ko"], pools["en"], cps, w, style_range[0], style_range[1], 40, 0.35, 0.08, rng)
-    gen_s = G.MixedLineSampler(pools["ko"], pools["en"], cps, w, gen_range[0], gen_range[1], 130, 0.35, 0.08, rng)
-    print(f"samplers: style {style_range} gen {gen_range} | ko {len(pools['ko'])} en {len(pools['en'])} cps {len(cps)}")
+        f = {ord(c) for c in s}
+        cps |= f
+        inter = f if inter is None else inter & f
+    # rand 음절 풀 = 전 폰트 교집합의 한글 음절 (KS X 1001 2350자) → tofu-safe
+    syls = sorted(chr(c) for c in inter if 0xAC00 <= c <= 0xD7A3)
+    w = {"ko": 0.45, "en": 0.20, "num": 0.20, "rand": 0.15}
+    style_s = G.MixedLineSampler(pools["ko"], pools["en"], cps, w, style_range[0], style_range[1], 40, 0.35, 0.08, rng,
+                                 rand_syllables=syls)
+    gen_s = G.MixedLineSampler(pools["ko"], pools["en"], cps, w, gen_range[0], gen_range[1], 130, 0.35, 0.08, rng,
+                               rand_syllables=syls)
+    print(f"samplers: style {style_range} gen {gen_range} | ko {len(pools['ko'])} en {len(pools['en'])} "
+          f"rand_syl {len(syls)} cps {len(cps)}")
     return style_s, gen_s
 
 

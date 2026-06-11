@@ -84,7 +84,11 @@ resume 시 이전 run 의 `train_config.yml` 과 인자가 다르면 `[config WA
 
 `korean_split_dataset.KoreanSplitFontSquare` = 원본 repo 의 `OnlineSplitFontSquare` 서브클래스.
 
-1. style/gen 텍스트를 **각각 다른 어절수 범위**로 샘플 (`MixedLineSampler`: 한글 0.55 / 영어 0.22 / 숫자 0.23 + 구두점·특수기호)
+1. style/gen 텍스트를 **각각 다른 어절수 범위**로 샘플 (`MixedLineSampler`:
+   한글 0.45 / 영어 0.20 / 숫자 0.20 / **랜덤음절 0.15** + 구두점·특수기호).
+   랜덤음절 = KS X 1001 2,350자(전 폰트 교집합)에서 균등 추첨한 1~4글자 가짜 단어
+   (논문의 "random words" 대응) — 코퍼스 빈도 편향 없이 전 음절을 단어 맥락으로 노출
+   (2,000라인 샘플링 시 2,347/2,350 음절 등장 확인)
 2. 같은 폰트로 두 텍스트를 렌더 → concat → 증강(rotation, TPS warp, blur, 종이배경, ink jitter, dilation 등) → 폭 기준 split → `style_img` / `gen_img`
 3. 폰트 = writer 1명. `assets/fonts_korean_v2/train/` 61개 손글씨 폰트
 4. `fonts_charsets.json` 의 전 폰트 charset union 으로 tofu 방지
