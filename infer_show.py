@@ -98,8 +98,8 @@ def main():
     device = torch.device(args.device)
     CW, CH = args.cell_w, args.cell_h
 
-    model = Emuru(t5_checkpoint="google-t5/t5-large", vae_checkpoint="blowing-up-groundhogs/emuru_vae",
-                  ocr_checkpoint=str(HERE / "files" / "checkpoints" / "Origami_bw_img" / "origami.pth")).to(device)
+    model = Emuru(t5_checkpoint="google-t5/t5-large",
+                  vae_checkpoint="blowing-up-groundhogs/emuru_vae").to(device)
     model.alpha = 1.0
     ck = torch.load(args.ckpt, map_location="cpu", weights_only=False)
     st = ck["model"] if "model" in ck else ck

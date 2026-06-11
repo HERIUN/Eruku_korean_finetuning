@@ -17,13 +17,10 @@ cd Eruku_korean_finetuning
 # 1. 환경 (uv)
 uv sync
 
-# 2. pretrained 체크포인트 다운로드 (~8.6 GB, HF)
-uv run python scripts/download_pretrained.py
-
-# 3. (선택) 데이터 파이프라인 sanity check — 학습 샘플 8개 저장
+# 2. (선택) 데이터 파이프라인 sanity check — 학습 샘플 8개 저장
 uv run python korean_split_dataset.py --n 8 --style 1 8 --gen 1 32 --out /tmp/ksplit
 
-# 4. 학습 (Phase-2 스타일: style 1~8 / gen 1~32 어절, lr 1e-5)
+# 3. 학습 (Phase-2 스타일: style 1~8 / gen 1~32 어절, lr 1e-5)
 CUDA_VISIBLE_DEVICES=0 uv run python train_korean.py \
   --online-split --style-words 1 8 --gen-words 1 32 \
   --text-dropout 0.05 --style-text-dropout 0.10 \
@@ -34,7 +31,10 @@ CUDA_VISIBLE_DEVICES=0 uv run python train_korean.py \
 ```
 
 첫 실행 시 HuggingFace 에서 `google-t5/t5-large`(config), `google/byt5-small`(tokenizer),
-`blowing-up-groundhogs/emuru_vae` 를 자동 다운로드하므로 인터넷이 필요합니다.
+`blowing-up-groundhogs/emuru_vae`, 그리고 **영어 pretrained weight**
+(`blowing-up-groundhogs/eruku` 의 `pytorch_model.bin`, ~2.9GB) 를 자동 다운로드하므로
+인터넷이 필요합니다. OrigamiNet OCR ckpt 는 불필요 (alpha=1.0 → OCR loss 미사용,
+공식 HF 릴리즈에도 OCR 모듈 없음).
 
 ### 이어 학습 (resume)
 
@@ -86,7 +86,6 @@ assets/
   fonts_label/             # NanumGothic (뷰어 라벨용)
   backgrounds/             # 종이 배경
   corpus/                  # korean_lines.json(한글 단어 풀) / chars.txt / english_words.txt
-scripts/download_pretrained.py
 ```
 
 ## 지금까지의 실험 요약 (2026-06 기준)
@@ -107,5 +106,5 @@ scripts/download_pretrained.py
 ## 요구 사양
 
 - CUDA GPU ≥ 24 GB (batch 2, max-img-len 2048 기준; T5-large 705M trainable)
-- 디스크: repo ~250 MB + 체크포인트 8.6 GB + 학습 ckpt 개당 ~8 GB
+- 디스크: repo ~250 MB + pretrained 2.9 GB(자동 다운로드) + 학습 ckpt 개당 ~8 GB
 - TPS C++ 백엔드는 선택 (`custom_datasets/font_square/tps/build.sh`, `uv sync --extra tps` 후) — 없으면 NumPy fallback 으로 동작

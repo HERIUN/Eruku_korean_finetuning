@@ -43,7 +43,8 @@ def parse_args():
     p.add_argument("--vae-checkpoint", default="blowing-up-groundhogs/emuru_vae")
     p.add_argument("--t5-checkpoint", default="google-t5/t5-large")
     p.add_argument("--eruku-pretrained", default="model_zoo/eruku_pretrained/000073688.pth",
-                   help="영어 학습 Eruku full ckpt — strict=False 로 로드")
+                   help="영어 pretrained ckpt. 로컬에 없으면 HF blowing-up-groundhogs/eruku "
+                        "의 pytorch_model.bin 을 자동 다운로드 (~2.9GB)")
     p.add_argument("--max-steps", type=int, default=20000)
     p.add_argument("--save-every", type=int, default=2000)
     p.add_argument("--log-every", type=int, default=50)
@@ -52,7 +53,8 @@ def parse_args():
     p.add_argument("--max-img-len", type=int, default=2048)
     p.add_argument("--num-workers", type=int, default=2)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    p.add_argument("--ocr-checkpoint", default=None, help="OrigamiNet ckpt (none → 기본 위치)")
+    p.add_argument("--ocr-checkpoint", default=None,
+                   help="OrigamiNet ckpt (기본 None=미사용. alpha<1 로 OCR loss 쓸 때만 필요)")
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--text-dropout", type=float, default=0.1,
                    help="학습 중 text 를 uncond 로 drop 할 확률 (>0 이어야 inference CFG 동작)")
@@ -99,21 +101,7 @@ def main():
     )
 
     # ── model ──
-    # OrigamiNet 영어 ckpt 가 한글에 무용 → 일단 dummy 경로 (없으면 init 자체가 안 될 수 있음 확인)
-    if args.ocr_checkpoint is None:
-        # Eruku __init__ 에서 OrigamiNet.from_checkpoint 호출 — 없으면 fail
-        # → Origami_bw_img/origami.pth 영어 ckpt 있는지 확인
-        candidate = HERE / "files" / "checkpoints" / "Origami_bw_img" / "origami.pth"
-        if candidate.exists():
-            args.ocr_checkpoint = str(candidate)
-            print(f"using OCR ckpt (영어, but only loaded — alpha=1 disables 사용): {candidate}")
-        else:
-            raise FileNotFoundError(
-                f"OrigamiNet ckpt not found at {candidate}. "
-                "Eruku 클래스가 from_checkpoint 호출하므로 임의 파일이라도 필요. "
-                "혹은 Eruku 클래스 수정 (ocr None 허용)."
-            )
-
+    # OCR(OrigamiNet) 은 alpha=1.0 이라 미사용 → ocr_checkpoint=None 으로 생략 (기본)
     model = Emuru(
         t5_checkpoint=args.t5_checkpoint,
         vae_checkpoint=args.vae_checkpoint,
@@ -127,12 +115,19 @@ def main():
     print(f"text-dropout: prob={model.dropout_probability} drop_text={model.drop_text}")
     model.set_training(model.T5, True)
     model.set_training(model.vae, False)
-    model.set_training(model.ocr, False)
+    if model.ocr is not None:
+        model.set_training(model.ocr, False)
 
     # 영어 학습 Eruku ckpt 로드 (strict=False). resume 시엔 건너뜀(resume ckpt 가 모델).
-    if not args.resume and args.eruku_pretrained and Path(args.eruku_pretrained).exists():
-        print(f"loading pretrained: {args.eruku_pretrained}")
-        ckpt = torch.load(args.eruku_pretrained, map_location="cpu", weights_only=False)
+    # 로컬 파일이 없으면 HF 공식 릴리즈(pytorch_model.bin, ~2.9GB)를 자동 다운로드.
+    if not args.resume and args.eruku_pretrained:
+        ck_path = Path(args.eruku_pretrained)
+        if not ck_path.exists():
+            from huggingface_hub import hf_hub_download
+            print("local pretrained 없음 → HF 자동 다운로드: blowing-up-groundhogs/eruku (~2.9GB)")
+            ck_path = Path(hf_hub_download("blowing-up-groundhogs/eruku", "pytorch_model.bin"))
+        print(f"loading pretrained: {ck_path}")
+        ckpt = torch.load(ck_path, map_location="cpu", weights_only=False)
         state = ckpt["model"] if "model" in ckpt else ckpt
         if any(k.startswith("module.") for k in state):
             state = {k[len("module."):]: v for k, v in state.items()}

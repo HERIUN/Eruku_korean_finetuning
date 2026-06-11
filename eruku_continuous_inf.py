@@ -62,7 +62,7 @@ SPECIAL_TOKEN_COUNT = 3
 class Emuru(torch.nn.Module):
     def __init__(self, t5_checkpoint='google-t5/t5-base',
                  vae_checkpoint='blowing-up-groundhogs/emuru_vae',
-                 ocr_checkpoint='files/checkpoints/Origami_bw_img/origami.pth', slices_per_query=1, channels=1, text_dropout_probability=0.0, img_dropout_probability=0.0):
+                 ocr_checkpoint=None, slices_per_query=1, channels=1, text_dropout_probability=0.0, img_dropout_probability=0.0):
         super(Emuru, self).__init__()
         self.tokenizer = AutoTokenizer.from_pretrained('google/byt5-small')  # per-character tokenizer
         self.tokenizer.add_tokens(["<sog>"])
@@ -106,8 +106,13 @@ class Emuru(torch.nn.Module):
 
         self.set_training(self.vae, False)
 
-        self.ocr = OrigamiNet.from_checkpoint(ocr_checkpoint, o_classes=165, n_channels=1)
-        self.set_training(self.ocr, False)
+        # OCR(OrigamiNet, 영어) 은 alpha<1.0 일 때만 loss 에 쓰임. 한글 학습은 alpha=1.0
+        # 이라 불필요 — 공식 HF 릴리즈(modeling_eruku.py)에도 OCR 모듈이 없음.
+        if ocr_checkpoint is not None:
+            self.ocr = OrigamiNet.from_checkpoint(ocr_checkpoint, o_classes=165, n_channels=1)
+            self.set_training(self.ocr, False)
+        else:
+            self.ocr = None
         
         self.query_rearrange = Rearrange('b c h (w q) -> b w (q c h)', q=slices_per_query)
         self.special_rearrange = torch.nn.Identity()
@@ -292,6 +297,8 @@ class Emuru(torch.nn.Module):
         ocr_loss = 0
 
         if self.alpha < 1.0:
+            if self.ocr is None:
+                raise RuntimeError("alpha<1.0 (OCR loss) 사용하려면 ocr_checkpoint 필요")
             pred_img = self.vae.decode(pred_latent).sample
             gt_img = self.vae.decode(decoder_inputs_embeds_vae.unsqueeze(1)).sample
             ocr_preds = self.ocr(pred_img)
