@@ -185,9 +185,16 @@ class Emuru(torch.nn.Module):
                 sl_tensor = style_len[el] if hasattr(style_len, '__getitem__') else style_len
                 sl = _safe_int_from_maybe_tensor(sl_tensor)
 
-            # Ensure widths are within bounds
-            sl = max(64, min(sl, style_img_embeds.shape[-1]))
-            
+            # Ensure widths are within bounds.
+            # 원본 validate_widths 와 동일: style 은 max_img_len 의 절반까지만 차지하게 제한.
+            # (이게 없으면 긴 style 이 budget 을 다 먹고, 끝의 truncation 이 gen 꼬리를 잘라
+            #  모델이 EOG 위치를 잘못 배움 = 조기 EOG / 전체문장 미생성의 원인)
+            # ★ 단위주의: sl 은 '픽셀', style_img_embeds.shape[-1] 은 'latent 폭'(=픽셀/8).
+            #   원본은 style 을 고정 8192px 로 패딩(pad_images_fixed)해 latent 폭을 크게 만들어
+            #   이 항이 발동 안 하게 했지만, 여기선 배치최대 폭으로만 패딩하므로 *8 로 픽셀 환산해야
+            #   style 이 1/8 로 잘리지 않는다. (docs/STYLE_LEN_BUG.md 참고)
+            sl = max(64, min(sl, style_img_embeds.shape[-1] * 8, max_img_len // 2))
+
             # Start with style image embeds
             sample_embeds_parts = [style_img_embeds[el,:,:,:sl//8]]
             specials_parts = [torch.ones(sl//8) * 2] # Img token
@@ -199,7 +206,11 @@ class Emuru(torch.nn.Module):
                     gl_tensor = gen_len[el] if hasattr(gen_len, '__getitem__') else gen_len
                     gl = _safe_int_from_maybe_tensor(gl_tensor)
 
-                gl = max(64, min(gl, gen_img_embeds.shape[-1]))
+                # 원본 validate_widths 와 동일: gen 은 style 을 뺀 남은 budget 까지만.
+                # (SOG+EOG 2 토큰 = 16px 예약). 이러면 끝의 truncation 이 gen 을 자를 일이 없음.
+                # ★ 단위주의: gen_img_embeds.shape[-1] 은 latent 폭 → *8 로 픽셀 환산 (위 sl 과 동일 이유)
+                remaining = max(64, max_img_len - sl - 16)
+                gl = max(64, min(gl, gen_img_embeds.shape[-1] * 8, remaining))
                 sample_embeds_parts.extend([
                     torch.ones(1, 8, 1).to(self.T5.device), # SOG token placeholder
                     gen_img_embeds[el,:,:,:gl//8],
