@@ -202,8 +202,40 @@ def to_gray(t):  # [3,H,W] in [-1,1] -> uint8 grayscale
     return (((t.mean(0) + 1) / 2).clamp(0, 1).numpy() * 255).astype(np.uint8)
 
 
-def dump_samples(ds, n, out_dir):
-    """학습에 쓰이는 형식의 샘플 n개를 저장 + montage."""
+def model_style_recon(model, style_img, gen_img, max_img_len):
+    """'모델이 실제로 받는 style' 을 복원 (학습 입력 = 데이터 파이프라인 검증용).
+
+    학습 루프와 **동일한** `model.get_model_inputs` 를 그대로 호출한다 → style-len 단위fix
+    (픽셀↔latent, docs/STYLE_LEN_BUG.md)가 반영된 실제 입력이 나온다. 반환 embeds 의 style
+    구간(첫 SOG 이전)만 VAE 디코딩해 이미지로 복원. 만약 fix 가 되돌려지면 여기서 style 이
+    1/8 로 잘려 그대로 눈에 보인다(= 회귀 검증). budget(max_img_len//2) 초과 style 도 잘림이 보인다.
+
+    반환: (복원 grayscale [64,W'], 복원폭 px, 원본 style 폭 px)
+    """
+    from einops import rearrange
+    with torch.no_grad():
+        mi = model.get_model_inputs([style_img], [gen_img],
+                                    int(style_img.shape[-1]), int(gen_img.shape[-1]), max_img_len)
+        emb = mi["decoder_inputs_embeds"][0]     # [seq, 8]
+        sp = mi["specials"][0]                    # [seq]  (2=Img, 0=SOG, 1=EOG)
+        sog = (sp == 0).nonzero().flatten()
+        end = int(sog[0].item()) if len(sog) else int((sp == 2).sum().item())
+        end = max(1, end)
+        lat = rearrange(emb[:end], 'w (c h) -> 1 c h w', c=1, h=8).to(model.vae.device)
+        img = model.vae.decode(lat).sample        # [1,C,64,end*8] ~[-1,1]
+    im = ((img.clamp(-1, 1) + 1) / 2)[0]
+    if im.shape[0] > 1:
+        im = im.mean(0, keepdim=True)
+    arr = (im[0].cpu().numpy() * 255).astype(np.uint8)
+    return arr, end * 8, int(style_img.shape[-1])
+
+
+def dump_samples(ds, n, out_dir, model=None, max_img_len=2048):
+    """학습에 쓰이는 형식의 샘플 n개를 저장 + montage.
+
+    model 지정 시(=Emuru): 각 행에 '모델이 실제로 받는 style(복원)' 열을 추가해, 데이터
+    파이프라인에서 style-len 단위fix 가 반영됐는지 end-to-end 로 확인 (model_style_recon).
+    """
     out = Path(out_dir); out.mkdir(parents=True, exist_ok=True)
     gf = ImageFont.truetype(str(ASSETS / "fonts_label/NanumGothic-Regular.ttf"), 15)
     rows = []
@@ -212,7 +244,7 @@ def dump_samples(ds, n, out_dir):
         si, gi = to_gray(s["style_img"]), to_gray(s["gen_img"])
         cv2.imwrite(str(out / f"{i:03d}_style.png"), si)
         cv2.imwrite(str(out / f"{i:03d}_gen.png"), gi)
-        # montage row: label + [style | sep | gen]
+        # montage row: label + [style | sep | gen  (| sep | 모델입력 style)]
         H = 64
         def fit(a):
             if a.shape[0] != H:
@@ -220,11 +252,20 @@ def dump_samples(ds, n, out_dir):
             return a
         si, gi = fit(si), fit(gi)
         sep = np.full((H, 6), 0, np.uint8)
-        body = np.hstack([si, sep, gi])
+        parts = [si, sep, gi]
+        cov_txt = ""
+        if model is not None:
+            recon, used_px, orig_px = model_style_recon(model, s["style_img"], s["gen_img"], max_img_len)
+            cv2.imwrite(str(out / f"{i:03d}_model_style.png"), recon)
+            parts += [np.full((H, 6), 0, np.uint8), fit(recon)]
+            cov = used_px / max(1, orig_px)
+            cov_txt = f" | [model-style {used_px}/{orig_px}px {cov:.0%}]"
+        body = np.hstack(parts)
         lab = Image.new("L", (body.shape[1], 22), 235)
-        ImageDraw.Draw(lab).text((4, 3), f"[style:{s['style_text']}] | [gen:{s['gen_text']}]", font=gf, fill=0)
+        ImageDraw.Draw(lab).text((4, 3), f"[style:{s['style_text']}] | [gen:{s['gen_text']}]{cov_txt}", font=gf, fill=0)
         rows.append(np.vstack([np.array(lab), body, np.full((4, body.shape[1]), 90, np.uint8)]))
-        print(f"  {i}: style={s['style_text']!r} ({si.shape[1]}px) | gen={s['gen_text']!r} ({gi.shape[1]}px)")
+        print(f"  {i}: style={s['style_text']!r} ({si.shape[1]}px) | gen={s['gen_text']!r} ({gi.shape[1]}px)"
+              + (cov_txt if model is not None else ""))
     W = max(r.shape[1] for r in rows)
     rows = [np.hstack([r, np.full((r.shape[0], W - r.shape[1]), 255, np.uint8)]) if r.shape[1] < W else r for r in rows]
     Image.fromarray(np.vstack(rows)).save(out / "_montage.png")
@@ -237,6 +278,20 @@ if __name__ == "__main__":
     ap.add_argument("--style", nargs=2, type=int, default=[1, 8])
     ap.add_argument("--gen", nargs=2, type=int, default=[2, 16])
     ap.add_argument("--out", default="/tmp/ksplit")
+    ap.add_argument("--show-model-input", action="store_true",
+                    help="각 행에 '모델이 실제로 받는 style(복원)' 열 추가 → style-len 단위fix 가 "
+                         "데이터 파이프라인에 반영됐는지 검증. Emuru(VAE+get_model_inputs) 로드 필요.")
+    ap.add_argument("--max-img-len", type=int, default=2048,
+                    help="--show-model-input 시 get_model_inputs 예산 (학습값과 맞추면 실제 잘림 재현).")
     args = ap.parse_args()
     ds = make_dataset(style_range=tuple(args.style), gen_range=tuple(args.gen), length=10000)
-    dump_samples(ds, args.n, args.out)
+    model = None
+    if args.show_model_input:
+        # T5 는 config-init(랜덤)이라 가중치 다운로드 없음. 필요한 건 pretrained VAE + get_model_inputs
+        # 슬라이스 로직뿐(학습 가중치 무관 = 어떤 ckpt 든 style 잘림 결과 동일).
+        from eruku_continuous_inf import Emuru
+        dev = "cuda" if torch.cuda.is_available() else "cpu"
+        print("loading Emuru (VAE + get_model_inputs) for model-input view ...")
+        model = Emuru(t5_checkpoint="google-t5/t5-large",
+                      vae_checkpoint="blowing-up-groundhogs/emuru_vae").to(dev).eval()
+    dump_samples(ds, args.n, args.out, model=model, max_img_len=args.max_img_len)

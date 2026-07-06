@@ -162,3 +162,26 @@ PYTHONPATH=. .venv/bin/python docs/_verify_style_len.py
 - 이 버그 상태로 학습된 체크포인트는 style 을 거의 못 봤으므로, 수정 후 **재학습(또는 이어학습)** 권장.
 - 원본 Emuru 체크포인트에서 파인튜닝 시 특히 치명적: 사전학습은 full style, 파인튜닝은 1/8 style → 조건 분포 불일치.
 - `*8` 수정은 **짧은 텍스트(정상 경로)에는 순개선**(측정: 사용률 100%, EOG 정상, 시퀀스 짧음). 긴 텍스트에서만 위 예산 truncation 이 새로 드러나며, 이는 애초 파이프라인의 "짧은 라인" 전제를 벗어난 사용 때문이다.
+
+---
+
+## 관련 버그: 이중정규화 (`_img_encode`)  — 2026-07 수정
+
+`korean_split_dataset.py --show-model-input`(dump_samples 의 '모델이 받는 style' 복원 열)으로
+파이프라인을 검증하다 발견. **style-len(위)과는 별개**의 전처리 단위 문제.
+
+- **증상:** `_img_encode` 가 이미 `[-1,1]` 인 입력(dataset `t_norm` / infer `style_tensor` 모두
+  `Normalize(0.5,0.5)`)에 `self.normalize=Normalize(0.5,0.5)` 를 **한 번 더** 적용 → `[-3,1]` 로 밀림.
+  VAE 표준 입력범위를 벗어나 style 조건 latent 가 왜곡(획이 굵고 어둡게).
+- **정량(N=12, latent `.mode()`):** 재구성 MSE vs 원본 — single(정상) **0.0074** vs double(현재) **0.0248**
+  (**3.4배 악화**), latent MSE 0.49. 시각비교: `_debug/doublenorm_compare.png`.
+- **왜 안 터졌나:** upstream 원본 코드 그대로 → train/infer 양쪽 일관 적용이라 모델이 그 왜곡된
+  인코딩에 적응. 즉 "동작은 하되 style 조건이 비표준".
+- **제거해도 되나(실측):** double 로 학습된 ckpt(en2ko_v2 20k)에서 style 조건만 single 로 바꿔 echo
+  생성 → **붕괴 없음, MSE 0.1629→0.1457 소폭 개선, SSIM 평평**. 모델이 톤왜곡에 강결합돼 있지 않음
+  = 제거 저위험. (`scratchpad/exp_norm_echo.py`)
+- **수정:** `_img_encode` 에서 `self.normalize(img)` 제거 → VAE 가 정상 `[-1,1]` 입력을 받음.
+  재구성/조건 품질 정상화. **재학습 시 반영**(style-len 재학습과 동일 시점).
+
+→ 데이터 파이프라인 검증 도구: `uv run python korean_split_dataset.py --n 8 --show-model-input --out /tmp/ks`
+  (각 행에 '모델이 실제로 받는 style' 복원 열 → style-len fix·정규화가 반영됐는지 눈으로 확인)

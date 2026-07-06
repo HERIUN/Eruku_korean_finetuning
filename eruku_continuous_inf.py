@@ -155,7 +155,10 @@ class Emuru(torch.nn.Module):
             param.requires_grad = training 
     
     def _img_encode(self,img):
-        img = self.normalize(img)
+        # ★ 이중정규화 제거: 입력 img 는 이미 [-1,1] (dataset t_norm / infer style_tensor 모두
+        #   Normalize(0.5,0.5) 적용) = VAE 표준 입력범위. upstream 원본은 여기서 self.normalize 를
+        #   한 번 더 적용해 [-3,1] 로 밀어 VAE 재구성이 ~3.4배 악화됐다(docs/STYLE_LEN_BUG.md).
+        #   실측: single(정상[-1,1]) 로 바꿔도 생성 붕괴 없음(MSE 소폭 개선) → 제거. (self.normalize=Identity 와 동일 효과)
         # Ensure contiguous memory layout before encode to avoid kernel issues
         img = img.contiguous()
         return self.vae.encode(img.float()).latent_dist.sample()
