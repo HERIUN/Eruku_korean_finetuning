@@ -20,31 +20,105 @@ sys.path.insert(0, str(HERE))
 import gen_korean_fontset as G
 from custom_datasets.font_square.font_square_split import OnlineSplitFontSquare
 from custom_datasets.font_square import font_transforms_split as FT
+from custom_datasets.font_square import font_transforms as FTN  # 단일 텍스트(비-split) 증강
+from torchvision import transforms as T
 
 
 class KoreanSplitFontSquare(OnlineSplitFontSquare):
-    """OnlineSplitFontSquare 와 동일하되 style/gen 을 서로 다른 sampler 로 뽑음."""
-    def __init__(self, fonts, backgrounds, style_sampler, gen_sampler, **kw):
+    """OnlineSplitFontSquare 와 동일하되 style/gen 을 서로 다른 sampler 로 뽑음.
+
+    ★ 경계 버그 수정 + style/gen 정책(2026-06): 원본은 [style|gap|gen] 을 한 이미지로 합쳐 렌더 후
+    RandomRotation·RandomWarping(비균일)을 전체 적용하고 고정 컬럼에서 잘라 → 변형이 경계를 밀어
+    style/gen 이 서로 침범(잘림/잔상)했다. 수정: style/gen 을 **각각 따로 렌더(경계 없음)** + 단계별
+    transform 명시 호출로 일부는 공유, 일부는 비대칭:
+    - **공유(style=gen, RNG 스냅샷으로 동일 실현)**: 같은 폰트(writer), GaussianBlur(선명도),
+      GrayscaleDilation(굵기), SplitAlphaChannel alpha_ink(잉크 투명도/희미함),
+      ColorJitter(contrast·saturation·hue; **brightness=0**) → 잉크 질감/대비 매칭.
+    - **비대칭**: RandomRotation(약한 기울기) = **style 만**(gen 곧은 글자) / 배경 = **gen 무조건 흰색**
+      (style 종이배경). RandomWarping(TPS 휨) 은 **완전 제거**(style·gen 모두). ColorJitter brightness=0
+      이라 흰배경은 거의 안 틀어짐(+0.99~1.0 유지).
+    근거: 모델 generate() 는 흰배경·곧은 글자를 출력 → 타겟(gen)을 그렇게 학습해야 휨/배경 전파 안 됨.
+    style 은 추론 시 실제 배경·필기 이미지라 현실적 증강 유지. 잉크 질감은 같은 writer 처럼 보이게 매칭.
+    """
+    def __init__(self, fonts, backgrounds, style_sampler, gen_sampler, legacy=False, **kw):
         super().__init__(fonts, backgrounds, text_sampler=style_sampler, **kw)
         self.style_sampler = style_sampler
         self.gen_sampler = gen_sampler
-        # RandomInvert 는 bg_patch 반전인데 합성이 곱셈(img = text*bg)이라
-        # 밝은 종이 배경(≈1)이 반전되면 이미지 전체가 ≈0 (새까만 무정보 샘플).
-        # 원본 font-square 의 컬러 배경에서만 유효한 증강 → 비활성화.
-        for t in self.transform.transforms:
-            if isinstance(t, FT.RandomInvert):
-                t.p = 0.0
+        # legacy=True: 원본 composite([style|gap|gen] 합쳐 렌더+전체증강+경계분할) 방식 사용(부모 self.transform).
+        # 데이터 transform 변경 전/후 비교 실험용. RandomInvert 는 곱셈합성에서 무정보 → 원본처럼 비활성.
+        self.legacy = legacy
+        if legacy:
+            for t in self.transform.transforms:
+                if isinstance(t, FT.RandomInvert):
+                    t.p = 0.0
+        renderers = self.transform.transforms[0].renderers
+        bg_dir = Path(backgrounds)
+        bg_paths = ([p for p in bg_dir.rglob('*') if p.suffix.lower() in ('.jpg', '.jpeg', '.png')]
+                    if bg_dir.is_dir() else list(backgrounds))
+        self.render_tf = FTN.RenderImage(self.fonts, renderers=renderers, pad=20)
+        # 단계별 transform (Compose 대신 명시 호출): 공유 단계(블러·굵기)는 RNG 스냅샷으로 둘에 동일 적용.
+        self.t_rotate = FTN.RandomRotation(3, fill=1, p=0.5)           # style 만(약한 기울기). warp 는 제거됨.
+        self.t_blur = FTN.GaussianBlur(kernel_size=3, p=0.5)          # ★ 공유(선명도 매칭)
+        self.t_bg = FTN.RandomBackground(bg_paths, white_p=0.1)        # style 만(종이배경)
+        self.t_tailor = FTN.TailorTensor(pad=3)
+        self.t_split = FTN.SplitAlphaChannel()                        # ★ 공유(alpha_ink 0.5~1.0 매칭)
+        self.t_dilate = FTN.GrayscaleDilation(kernel_size=2, p=0.1)   # ★ 공유(굵기 매칭)
+        # ★ 공유: ColorJitter — brightness=0(끔), contrast·saturation·hue 만 style/gen 동일 적용
+        self.t_jitter = FTN.ColorJitter(brightness=0, contrast=0.05, saturation=0.05, hue=0.05, p=0.5)
+        self.t_resize = FTN.ImgResize(64)
+        self.t_merge = FTN.MergeWithBackground()
+        self.t_norm = FTN.Normalize((0.5,), (0.5,))
+
+    @staticmethod
+    def _snap():
+        return random.getstate(), np.random.get_state(), torch.get_rng_state()
+
+    @staticmethod
+    def _restore(st):
+        random.setstate(st[0]); np.random.set_state(st[1]); torch.set_rng_state(st[2])
 
     def __getitem__(self, font_id):
         font_id = font_id % self.renderers_length
         style_text, gen_text = self.style_sampler(), self.gen_sampler()
-        sample = self.transform({'style_text': style_text, 'gen_text': gen_text, 'font_id': font_id})
-        sw = sample['style_img_width'] * sample['img'].shape[2] // sample['total_img_width']
+        # ── legacy: 원본 composite 방식 (합쳐 렌더 → 전체 증강 → 고정컬럼 분할) ──
+        if self.legacy:
+            sample = self.transform({'style_text': style_text, 'gen_text': gen_text, 'font_id': font_id})
+            sw = sample['style_img_width'] * sample['img'].shape[2] // sample['total_img_width']
+            return {'style_img': sample['img'][:, :, :sw], 'gen_img': sample['img'][:, :, sw:],
+                    'style_text': sample['style_text'], 'gen_text': sample['gen_text'], 'writer': font_id}
+        # ── 신 방식: style/gen 독립 렌더(경계 없음), 같은 폰트(=같은 writer) ──
+        s = self.render_tf({'text': style_text, 'font_id': font_id})
+        g = self.render_tf({'text': gen_text, 'font_id': font_id})
+
+        # style 만: 약한 기울기(회전). warp(TPS 휨) 는 제거. gen 은 곧은 글자.
+        s = self.t_rotate(s)
+
+        # ★ 공유: GaussianBlur — 같은 결정/시그마를 style·gen 에 (선명도 매칭)
+        st = self._snap(); s = self.t_blur(s); self._restore(st); g = self.t_blur(g)
+
+        # 배경: style = 종이배경(증강), gen = 흰배경 강제
+        s = self.t_bg(s)
+        _, h, w = g['img'].shape
+        g['bg_patch'] = torch.ones((3, h, w))
+
+        # 둘 다: 크롭
+        s = self.t_tailor(s); g = self.t_tailor(g)
+        # ★ 공유: SplitAlphaChannel — 같은 alpha_ink(잉크 투명도/희미함)를 둘에
+        st = self._snap(); s = self.t_split(s); self._restore(st); g = self.t_split(g)
+        # ★ 공유: GrayscaleDilation — 같은 굵기 결정을 둘에
+        st = self._snap(); s = self.t_dilate(s); self._restore(st); g = self.t_dilate(g)
+
+        # ★ 공유: ColorJitter(brightness=0, contrast·sat·hue) — 같은 실현을 style·gen 에
+        st = self._snap(); s = self.t_jitter(s); self._restore(st); g = self.t_jitter(g)
+
+        # 둘 다: 리사이즈 → 배경합성 → 정규화
+        for t in (self.t_resize, self.t_merge, self.t_norm):
+            s = t(s); g = t(g)
         return {
-            'style_img': sample['img'][:, :, :sw],
-            'gen_img': sample['img'][:, :, sw:],
-            'style_text': sample['style_text'],
-            'gen_text': sample['gen_text'],
+            'style_img': s['img'],
+            'gen_img': g['img'],
+            'style_text': s['text'],
+            'gen_text': g['text'],
             'writer': font_id,
         }
 
@@ -72,15 +146,48 @@ def build_samplers(style_range, gen_range, n_english=8000, seed=42):
     return style_s, gen_s
 
 
-def make_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, seed=42):
+def make_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, seed=42, fonts_dir=None, legacy=False):
+    """fonts_dir 미지정 시 학습 폰트(fonts_korean_v2/train). val 은 held-out 폰트 디렉토리 전달.
+    legacy=True: 원본 composite transform(데이터 정책 변경 전) 사용."""
     style_s, gen_s = build_samplers(style_range, gen_range, seed=seed)
-    return KoreanSplitFontSquare(ASSETS / "fonts_korean_v2/train",
+    fonts_dir = Path(fonts_dir) if fonts_dir else (ASSETS / "fonts_korean_v2/train")
+    return KoreanSplitFontSquare(fonts_dir,
                                  str(ASSETS / "backgrounds"),
+                                 style_s, gen_s, length=length, legacy=legacy)
+
+
+def build_english_samplers(style_range, gen_range, fonts_dir, n_english=8000, seed=42):
+    """영어 전용(라틴 폰트) sampler. ko=0, en+num 만 → 한글 토푸 방지.
+    cps = 영어 폰트 charset union (없으면 ASCII 가시문자)."""
+    rng = random.Random(seed)
+    pools = G.build_pools(ASSETS / "corpus/korean_lines.txt", ASSETS / "corpus/chars.txt",
+                          str(ASSETS / "corpus/english_words.txt"), n_english, rng)
+    csf = Path(fonts_dir) / "fonts_charsets.json"
+    cps = set()
+    if csf.exists():
+        for s in json.load(open(csf)).values():
+            cps |= {ord(c) for c in s}
+    else:
+        cps = set(range(0x20, 0x7f))
+    w = {"ko": 0.0, "en": 0.80, "num": 0.20, "rand": 0.0}   # 영어 단어 + 숫자만
+    style_s = G.MixedLineSampler(pools["ko"], pools["en"], cps, w, style_range[0], style_range[1],
+                                 40, 0.35, 0.08, rng, rand_syllables=[])
+    gen_s = G.MixedLineSampler(pools["ko"], pools["en"], cps, w, gen_range[0], gen_range[1],
+                               130, 0.35, 0.08, rng, rand_syllables=[])
+    print(f"english samplers: style {style_range} gen {gen_range} | en {len(pools['en'])} cps {len(cps)}")
+    return style_s, gen_s
+
+
+def make_english_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, seed=42, fonts_dir=None):
+    """라틴 폰트로 영어 전용 split 데이터. 학습에 한글 데이터와 섞어 영어 스타일 다양성 보강."""
+    assert fonts_dir, "english fonts_dir 필요"
+    style_s, gen_s = build_english_samplers(style_range, gen_range, fonts_dir, seed=seed)
+    return KoreanSplitFontSquare(Path(fonts_dir), str(ASSETS / "backgrounds"),
                                  style_s, gen_s, length=length)
 
 
 def split_collate(batch):
-    """split 데이터셋(style_img/gen_img/...) → train_korean 형식(style_img/same_img + len + text)."""
+    """split 데이터셋(style_img/gen_img/...) → train_core 형식(style_img/same_img + len + text)."""
     return {
         "style_img": [b["style_img"] for b in batch],
         "same_img": [b["gen_img"] for b in batch],
@@ -115,9 +222,9 @@ def dump_samples(ds, n, out_dir):
         sep = np.full((H, 6), 0, np.uint8)
         body = np.hstack([si, sep, gi])
         lab = Image.new("L", (body.shape[1], 22), 235)
-        ImageDraw.Draw(lab).text((4, 3), f"[style:{s['style_text'][:24]}] | [gen:{s['gen_text'][:40]}]", font=gf, fill=0)
+        ImageDraw.Draw(lab).text((4, 3), f"[style:{s['style_text']}] | [gen:{s['gen_text']}]", font=gf, fill=0)
         rows.append(np.vstack([np.array(lab), body, np.full((4, body.shape[1]), 90, np.uint8)]))
-        print(f"  {i}: style={s['style_text'][:30]!r} ({si.shape[1]}px) | gen={s['gen_text'][:40]!r} ({gi.shape[1]}px)")
+        print(f"  {i}: style={s['style_text']!r} ({si.shape[1]}px) | gen={s['gen_text']!r} ({gi.shape[1]}px)")
     W = max(r.shape[1] for r in rows)
     rows = [np.hstack([r, np.full((r.shape[0], W - r.shape[1]), 255, np.uint8)]) if r.shape[1] < W else r for r in rows]
     Image.fromarray(np.vstack(rows)).save(out / "_montage.png")

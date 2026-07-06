@@ -1,7 +1,7 @@
 """Eruku 한글 학습용 오프라인 데이터셋 생성기.
 
 폰트 = writer 1명 (person_key) 으로 매핑해서, 폰트마다 여러 개의 한글 라인
-이미지를 렌더 + 증강 후 디스크에 저장하고, train_korean.py 가 그대로 읽는
+이미지를 렌더 + 증강 후 디스크에 저장하고, train_core.py(--lines-json) 가 그대로 읽는
 lines_json (`[{image_path, text, person_key}]`) 을 만든다.
 
 증강은 Eruku/font_square FT 파이프라인과 같은 *종류* (TPS 류 elastic warp,
@@ -235,8 +235,15 @@ def jitter(arr: np.ndarray, rng: random.Random) -> np.ndarray:
 
 
 def augment(ink_arr: np.ndarray, bgs: list[np.ndarray], target_h: int,
-            rng: random.Random) -> np.ndarray:
+            rng: random.Random, clean: bool = False) -> np.ndarray:
     arr = ink_arr
+    if clean:
+        # 깨끗한 모드: warp/rotation/blur/배경 다 생략, 흰 배경 + 검은 글씨로만 resize
+        h, w = arr.shape
+        out = composite(arr, np.full((h, w), 255.0, np.float32), 0.0, 1.0)
+        nh = target_h
+        nw = max(1, int(round(w * (target_h / h))))
+        return cv2.resize(out, (nw, nh), interpolation=cv2.INTER_AREA)
     if rng.random() < 0.5:
         arr = aug_rotate(arr, 3.0, rng)
     if rng.random() < 0.7:
@@ -317,7 +324,7 @@ def gen_split(fonts: list[Path], pools: dict, bgs: list[np.ndarray],
                 ink = render_text(font, text, pad=args.pad)
                 if ink.shape[1] < 8 or ink.shape[0] < 8:
                     continue
-                out = augment(ink, bgs, args.height, rng)
+                out = augment(ink, bgs, args.height, rng, clean=getattr(args, "no_augment", False))
             except Exception as e:
                 print(f"    render err {fp.name} {text!r}: {e}")
                 continue
@@ -329,6 +336,7 @@ def gen_split(fonts: list[Path], pools: dict, bgs: list[np.ndarray],
                 "type": "라인(폰트합성)",
                 "person_key": person_key,
                 "image_path": str(img_path.resolve()),
+                "font_path": str(fp.resolve()),   # 정답칸 렌더용 (infer_show 가 사용)
             })
             made += 1
         print(f"  [{fi+1}/{len(fonts)}] {person_key}: {made} imgs (ko={len(ko_cov)} en={len(en_cov)})")
@@ -378,6 +386,9 @@ def main():
     ap.add_argument("--punct-prob", type=float, default=0.35, help="토큰에 구두점 붙일 확률")
     ap.add_argument("--special-prob", type=float, default=0.08, help="특수기호 단독 삽입 확률")
     ap.add_argument("--seed", type=int, default=42)
+    ap.add_argument("--no-augment", action="store_true",
+                    help="rotation/elastic warp/morph/blur/jitter/배경합성 다 끄고 "
+                         "깨끗한 흑백(흰 배경+검은 글씨) ref 생성. 휨 원인(학습 vs ref) 분리용")
     args = ap.parse_args()
 
     rng = random.Random(args.seed)

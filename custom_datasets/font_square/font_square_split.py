@@ -178,7 +178,7 @@ class OnlineSplitFontSquare(Dataset):
         self.transform = T.Compose([
             FT.RenderImage(self.fonts, pad=20, renderers=renderers),
             FT.RandomRotation(3, fill=1, p=0.5),
-            FT.RandomWarping(grid_shape=(5, 2), p=1.0),
+            FT.RandomWarping(grid_shape=(5, 2), p=0.5),  # 원본 기본값 복원: p=1.0이면 휨없는 샘플 0개 → 추론도 항상 휨
             FT.GaussianBlur(kernel_size=3, p=0.5),
             FT.RandomBackground(backgrounds, white_p=0.1),
             FT.TailorTensor(pad=3),

@@ -20,26 +20,26 @@ uv sync
 # 2. (선택) 데이터 파이프라인 sanity check — 학습 샘플 8개 저장
 uv run python korean_split_dataset.py --n 8 --style 1 8 --gen 1 32 --out /tmp/ksplit
 
-# 3-A. 한글 Phase 1 — 한글 glyph 본 학습 (짧은 2~4 어절 pair)
-#      virtual 256 = batch 16 × accum 16, lr 1e-4, wd 1e-2 (논문 레시피)
-CUDA_VISIBLE_DEVICES=0 uv run python train_korean.py \
-  --online-split --style-words 2 4 --gen-words 2 4 \
-  --text-dropout 0.05 \
-  --batch-size 16 --grad-accum 16 --lr 1e-4 \
-  --max-steps 20000 --save-every 1000 --log-every 10 \
-  --save-samples 16 \
-  --out finetune_runs/korean_p1
+# 3-A. 한글 Phase 1 — 한글 glyph 학습 (논문 레시피 내장: 짧은 2~3어절,
+#      virtual 256 = batch 128 × accum 2, lr 1e-4, 65000 step, num-workers 16)
+CUDA_VISIBLE_DEVICES=0 uv run python train_phase1.py
+#   → finetune_runs/korean_p1/  (정상완료 시 checkpoint_last.pth → Phase 2 가 resume)
+#   개별 인자 덮어쓰기 가능:  uv run python train_phase1.py --batch-size 16 --grad-accum 16 --max-steps 20000
 
-# 3-B. 한글 Phase 2 — 긴 줄 일반화 (Phase 1 ckpt 에서 resume)
-#      논문 그대로: batch 2 × accum 128 = virtual 256, 5000 iter
-CUDA_VISIBLE_DEVICES=0 uv run python train_korean.py \
-  --online-split --style-words 1 8 --gen-words 1 32 \
-  --text-dropout 0.05 --style-text-dropout 0.10 \
-  --batch-size 2 --grad-accum 128 --lr 1e-4 \
-  --max-steps 5000 --save-every 250 --log-every 10 \
-  --resume finetune_runs/korean_p1/checkpoint_last.pth \
-  --out finetune_runs/korean_p2
+# 3-B. 한글 Phase 2 — 긴 줄 일반화 (Phase 1 ckpt 에서 resume, +5000 step)
+#      논문 그대로: batch 2 × accum 128 = virtual 256, style 1~8 / gen 1~32
+CUDA_VISIBLE_DEVICES=0 uv run python train_phase2.py
+#   기본으로 korean_p1/checkpoint_last.pth 에서 resume, --extra-steps 5000 (= resume_step+5000 자동)
+#   다른 ckpt: uv run python train_phase2.py --resume finetune_runs/korean_p1/checkpoint_step_065000.pth
+
+# (대안) 영어 pretrained → 바로 한글 긴 줄 — Phase 1 생략, 영어능력 보존
+#        lr 5e-5, max-img-len 8192, batch 16 × accum 16, english-frac 0.15, held-out val 로깅
+CUDA_VISIBLE_DEVICES=0 uv run python train_korean_from_en.py   # → finetune_runs/korean_en2ko/
 ```
+
+> 진입점 구조: 공통 로직은 `train_core.py`(전체 인자 `make_parser` + 학습 루프)에 있고,
+> 각 Phase 스크립트(`train_phase1.py`/`train_phase2.py`/`train_korean_from_en.py`)가
+> `set_defaults` 로 레시피를 덮어씌운 뒤 `train()` 을 호출한다. 개별 인자는 CLI 로 덮어쓰기 가능.
 
 왜 두 단계인가: 논문에서 **Phase 1 (65000 iter × 256 = 16.6M 샘플, 짧은 단어쌍)** 이
 byte→glyph 매핑을 만들고, **Phase 2 (5000 iter = 1.28M, 긴 줄)** 는 길이 일반화만 담당.
@@ -47,15 +47,16 @@ byte→glyph 매핑을 만들고, **Phase 2 (5000 iter = 1.28M, 긴 줄)** 는 �
 시간에 더 많은 glyph 감독)로 먼저 가르치는 것이 효율적. 단 from-scratch 는 불필요 —
 VAE-latent 디코딩·자기회귀·style 메커니즘은 영어 pretrained 에서 전이됨.
 
-- `--max-steps` / `--save-every` / `--log-every` 는 **virtual step**(optimizer 업데이트) 기준
-- 노출량: Phase 1 20K step = 5.1M 샘플 (논문 65K 의 1/3 — 영어 전이 가정, 생성 보며 연장),
-  Phase 2 5000 step = 1.28M (논문과 동일). 논문은 10M 고정 데이터셋에서 1.28M 만 썼지만
-  우리는 온라인 무한 생성이라 모든 샘플 unique (resume 시에도 seed offset 으로 중복 방지)
-- 24GB 기준 측정 속도: Phase 1 (batch16) virtual step ~10s → 20K ≈ 55h,
-  Phase 2 (batch2) virtual step ~44s → 5K ≈ 60h
-- 빠른 sanity check (accumulation 없이): `--grad-accum 1 --lr 1e-5 --max-steps 4000`
-  — **주의: virtual batch 가 작으면 lr 도 낮춰야 함** (batch 2 + lr 5e-5 발산 확인됨,
-  논문 lr 1e-4 는 virtual 256 기준)
+- `--max-steps` / `--extra-steps` / `--save-every` / `--log-every` 는 **virtual step**(optimizer 업데이트) 기준.
+  Phase 2 는 `--extra-steps N` 으로 `max-steps = resume_step + N` 을 자동계산 → 누적값 실수 방지
+- 노출량(기본 레시피): Phase 1 65000 step × 256 = **16.6M 샘플**, Phase 2 5000 step × 256 = **1.28M**.
+  논문은 10M 고정 데이터셋을 재사용하지만 여기선 온라인 무한 생성이라 **모든 샘플 unique**
+  (resume 시에도 seed offset 으로 중복 방지). 노출량은 `--max-steps` 로 조절
+- VRAM: `train_korean_from_en.py`(batch 16 × accum 16, max-img-len 8192) 측정 **~35GB**.
+  Phase 1 batch 128 은 훨씬 큰 VRAM(멀티 GPU) 필요 — 단일 24GB 면 `--batch-size 16 --grad-accum 16`
+  으로 낮춰 virtual 256 을 유지
+- lr 은 **virtual batch 에 맞춰야** 함 (논문 lr 1e-4 = virtual 256 기준). virtual batch 를 줄이면 lr 도
+  낮출 것 (batch 2 + lr 5e-5 발산 확인). 빠른 sanity: `--grad-accum 1 --lr 1e-5`
 
 첫 실행 시 HuggingFace 에서 `google-t5/t5-large`(config), `google/byt5-small`(tokenizer),
 `blowing-up-groundhogs/emuru_vae`, 그리고 **영어 pretrained weight**
@@ -73,7 +74,7 @@ VAE-latent 디코딩·자기회귀·style 메커니즘은 영어 pretrained 에�
 ### 이어 학습 (resume)
 
 ```bash
-uv run python train_korean.py ... \
+uv run python train_phase2.py \
   --resume finetune_runs/korean_p2/checkpoint_step_004000.pth --max-steps 200000
 ```
 
@@ -158,7 +159,10 @@ CUDA_VISIBLE_DEVICES=0 uv run python infer_show.py \
 ## repo 구조
 
 ```
-train_korean.py            # 학습 런처 (online-split / resume / dropout 옵션)
+train_core.py              # 학습 공통 코어 (make_parser 전체 인자 + 학습 루프)
+train_phase1.py            # Phase 1 진입점 (짧은 어절, batch128×2, 65000 step)
+train_phase2.py            # Phase 2 진입점 (긴 줄, resume, +5000 step)
+train_korean_from_en.py    # 영어 pretrained → 한글 직접 (Phase 1 생략)
 korean_split_dataset.py    # 온라인 한글 split 데이터셋 (+ CLI 샘플 덤프)
 gen_korean_fontset.py      # 오프라인 라인 생성기 + MixedLineSampler/build_pools (공용)
 infer_show.py              # 자기설명적 결과 뷰어
