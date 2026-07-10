@@ -69,7 +69,13 @@ VAE-latent 디코딩·자기회귀·style 메커니즘은 영어 pretrained 에�
 - `train_config.yml` — 실행마다 전체 인자+타임스탬프가 **run 히스토리**로 누적 기록
 - `train_loss.csv` — `step,loss,mse,ce,it_s,timestamp` (log-every 마다, resume 시 이어 씀)
 - `checkpoint_step_XXXXXX.pth` — model + optimizer + step (resume 용)
-- `train_samples/` — `--save-samples N` 지정 시 학습 데이터 샘플 + montage
+- `train_samples/`(+`_en`) — `--save-samples N` 지정 시 학습 데이터 샘플 + montage.
+  **모델이 실제로 받는 style 복원 열** 포함(style-len·정규화 fix end-to-end 검증용)
+- `val_set.pt` / `val_samples/` — `--val-every>0` 시 **고정 held-out val 세트**(디스크 저장 → run 간 재사용,
+  매번 새로 샘플링 안 함). 한글(unseen 폰트)+영어를 `--english-frac` 비율로 섞고, `--val-samples` 로 총량 지정
+- `val_loss.csv` — `step,val_loss,val_mse,val_ce,timestamp`
+- `truncated_samples.csv` — **절대 truncation 금지 정책**: `max_img_len` 예산 초과로 style/gen 이 잘릴
+  샘플은 학습에서 **drop** 하고 여기에 기록(step/종류/길이/텍스트). 몇 개중 몇 개 버렸는지 추적
 
 ### 이어 학습 (resume)
 
@@ -88,11 +94,16 @@ resume 시 이전 run 의 `train_config.yml` 과 인자가 다르면 `[config WA
 사실상 무한 데이터셋. 한 샘플 = `(style_img, style_text, gen_img, gen_text)` 4-tuple.
 
 ### (1) 폰트 = writer
-- **손글씨/디스플레이 폰트 61종** (`assets/fonts_korean_v2/train/` 의 .ttf).
+- **한글 손글씨/디스플레이 폰트 83종** (`assets/fonts_korean_v2/train/` 의 .ttf).
   Eruku 의 "writer(필체)" 개념을 폰트 1종 = writer 1명으로 매핑.
+  (초기 손글씨 폰트 + Google Fonts 한글(`tools_fetch_gf_korean.py` 수집)을 병합해 현재 83종)
 - 렌더가 깨지는 폰트 3종(NMFClassic, GangwonEduSaeeum, KCCPakKyongni)은 제거됨.
 - `fonts_charsets.json` 에 각 폰트의 charset 을 캐시 → 폰트가 못 그리는 글자(두부 □)를
   애초에 샘플하지 않아 tofu 방지.
+- **held-out 검증 폰트 16종** (`assets/fonts_korean_unseen/`, `--val-fonts-dir` 기본값):
+  학습에 안 쓴 폰트로 val loss 측정 → 스타일 일반화 확인.
+- **영어 폰트 177종** (`assets/fonts_english/`, `--english-fonts-dir` 기본값):
+  `--english-frac > 0` 일 때 라틴 폰트 데이터를 섞어 영어 스타일 다양성 보강 (`tools_fetch_gf_english.py` 로 수집).
 
 ### (2) 텍스트 = MixedLineSampler 로 합성한 가짜 라인
 style 텍스트와 gen(target) 텍스트를 **각각 독립적으로**, 아래 비중으로 토큰을 섞어 1줄 생성
@@ -121,6 +132,22 @@ style 텍스트와 gen(target) 텍스트를 **각각 독립적으로**, 아래 �
 3. 폭 기준으로 잘라 `style_img`(조건) / `gen_img`(target) 로 분리.
 - 데이터 sanity check: `uv run python korean_split_dataset.py --n 8 --out /tmp/ksplit`
   → 8개 style/gen pair + montage 저장.
+
+### 원본 repo(`OnlineSplitFontSquare` + `TextSampler`) 대비 변경점
+
+한글판은 원본 온라인 합성 파이프라인을 **서브클래스**(`KoreanSplitFontSquare`)로 재사용하되,
+아래 4가지를 바꿨다. 근거는 각 항목의 코드 위치 참조.
+
+| 구분 | 원본 repo | 한글판 (변경) | 이유 |
+|---|---|---|---|
+| **텍스트 소스** | `TextSampler`: 영어 단어만(nltk 6개 코퍼스 103,411단어), uni/bigram 빈도 가중 1종 sampler로 style·gen 동일 추첨 | `MixedLineSampler`: 한글0.45/영어0.20/숫자0.20/랜덤음절0.15 혼합 + 구두점·특수기호 부착. **폰트 charset 인지**(못 그리는 글자 미추첨 → tofu 방지) | 한글+숫자+기호 혼합 라인이 목표. 빈도편향 없이 전 음절 노출(랜덤음절) |
+| **style/gen sampler** | 단일 sampler → style·gen 어절수 범위 동일 | style/gen **독립 sampler**(범위 분리 가능: Phase1 2~3/2~3, Phase2 1~8/1~32) | 조건(style)과 타겟(gen) 길이를 따로 통제 |
+| **렌더 방식** | `[style\|gap\|gen]`을 **한 이미지로 합쳐 렌더** → 증강 → 고정 컬럼비로 분할 | style/gen을 **각각 따로 렌더**(경계 없음) | 원본은 회전·warp가 경계를 밀어 style↔gen 침범(잘림/잔상). 분리로 제거 (`korean_split_dataset.py:80-123`) |
+| **증강 정책** | 합친 이미지에 일괄: RandomRotation·**RandomWarping(TPS 휨)**·Blur·배경·Dilation·ColorJitter(bright=0.05)·**RandomInvert(p=0.2)** | **RandomWarping 완전 제거**, **RandomInvert 비활성**, RandomRotation은 **style만**(gen 곧게), 배경은 **gen 흰색 강제**(style만 종이배경), ColorJitter **brightness=0**. Blur·Dilation·AlphaChannel(잉크)·Jitter는 **RNG 스냅샷으로 style·gen 동일 실현**(같은 writer 질감 매칭) | 모델 `generate()`가 흰배경·곧은 글자를 출력 → 타겟을 그렇게 학습해야 휨/배경이 전파 안 됨. style은 추론 시 실제 필기라 현실 증강 유지 |
+
+- **폰트(writer)**: 원본 font_square 영어 폰트 → **한글 손글씨/디스플레이 폰트 83종**(`assets/fonts_korean_v2/train/`).
+- `--legacy-transform` 플래그로 원본 composite(합쳐 렌더+일괄증강+경계분할) 방식을 그대로 재현 가능(전/후 비교 실험용).
+- 원본 대비 **동일하게 유지**한 것: 온라인 무한 생성(디스크 0), 높이 64px, VAE-latent split 구조, `p_uncond` 텍스트 dropout 메커니즘.
 
 ### 논문 레시피 매핑
 - `--text-dropout 0.05` = p_uncond (style+gen 텍스트 모두 drop → CFG 학습)
@@ -154,24 +181,45 @@ CUDA_VISIBLE_DEVICES=0 uv run python infer_show.py \
   --lines-json data/ref_set/train_lines.json \
   --seed-text "오늘 날씨가 좋아서 친구와 공원에서 커피를 마셨다 2024년" \
   --cfgs 1.0 1.25 1.5 1.75 2.0 --n-writers 4 --out _debug/show.png
+
+# style 텍스트(ref 전사) 제공 여부:
+#   기본        → style ref 의 텍스트를 조건으로 함께 줌
+#   --no-style-text → style 이미지만으로 스타일 파악(전사 미제공). 컬럼 라벨에 (no-stext) 표시.
+#   둘을 비교하려면 같은 인자로 두 번 실행(--out 만 다르게):
+uv run python infer_show.py --ckpt ... --out _debug/show_stext.png
+uv run python infer_show.py --ckpt ... --out _debug/show_nostext.png --no-style-text
 ```
 
 ## repo 구조
 
 ```
+# 학습
 train_core.py              # 학습 공통 코어 (make_parser 전체 인자 + 학습 루프)
 train_phase1.py            # Phase 1 진입점 (짧은 어절, batch128×2, 65000 step)
 train_phase2.py            # Phase 2 진입점 (긴 줄, resume, +5000 step)
 train_korean_from_en.py    # 영어 pretrained → 한글 직접 (Phase 1 생략)
-korean_split_dataset.py    # 온라인 한글 split 데이터셋 (+ CLI 샘플 덤프)
+train_eruku_continous.py   # (원본 repo 스타일 트레이너: wandb/accelerate/webdataset 기반, 참고용)
+# 데이터
+korean_split_dataset.py    # 온라인 한글 split 데이터셋 (+ CLI 샘플 덤프, --show-model-input)
 gen_korean_fontset.py      # 오프라인 라인 생성기 + MixedLineSampler/build_pools (공용)
-infer_show.py              # 자기설명적 결과 뷰어
+tools_fetch_gf.py          # Google Fonts 수집기 (--lang ko|en, 한/영 통합)
+tools_font_audit.py        # 폰트 품질 감사: 미지원(두부)·malformed 글리프 스캔 (코퍼스 기준)
+# 추론 / 평가  (infer_show.py 가 공유 라이브러리: load_model/gen_arr/render_in_font …)
+infer_show.py              # 자기설명적 결과 뷰어 [스타일ref|정답|생성 cfg…] (--exclude-writers 로 폰트 제외)
+infer_matrix.py            # 스타일×텍스트 매트릭스 뷰어 (1 style → 여러 gen_text)
+infer_echo_compare.py      # echo(style==gen) 모델 나란히 비교 뷰어
+eval_echo_metrics.py       # echo 정량 (MSE/SSIM/LPIPS/FID)
+eval_cer.py                # echo CER (OCR 기반, 정렬무관·언어공정)
+eval_all.py                # 통합 평가 배터리 (eval_cer+eval_echo_metrics 오케스트레이션)
+# 모델 / 원본 코드
 eruku_continuous_inf.py    # Emuru 모델 (forward/generate) — style-len 단위버그 수정됨
 custom_datasets/           # 원본 repo 데이터 코드 (font_square 렌더/증강, tps)
 models/                    # OrigamiNet 등
 docs/                      # 파이프라인 상세/버그 분석 문서 + 재현 스크립트·이미지
 assets/
-  fonts_korean_v2/train/   # 손글씨 폰트 61개 + fonts_charsets.json
+  fonts_korean_v2/train/   # 한글 손글씨/디스플레이 폰트 83개 + fonts_charsets.json
+  fonts_korean_unseen/     # held-out 검증 폰트 16개 (--val-fonts-dir 기본값)
+  fonts_english/           # 영어(라틴) 폰트 177개 (--english-fonts-dir 기본값)
   fonts_label/             # NanumGothic (뷰어 라벨용)
   backgrounds/             # 종이 배경
   corpus/                  # korean_lines.txt(한 줄당 한 문장) / chars.txt / english_words.txt

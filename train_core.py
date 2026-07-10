@@ -91,12 +91,58 @@ def make_parser():
                    help="N virtual step 마다 held-out 폰트로 val loss 측정(0=비활성). "
                         "online-split 일 때만 동작. val_loss.csv 에 기록")
     p.add_argument("--val-fonts-dir", default=str(HERE / "assets" / "fonts_korean_unseen"),
-                   help="held-out(학습 미사용) 폰트 디렉토리 = val 일반화 측정 대상")
+                   help="held-out(학습 미사용) 한글 폰트 디렉토리 = val 일반화 측정 대상")
+    p.add_argument("--val-english-fonts-dir", default=None,
+                   help="val 영어(라틴) 폰트 디렉토리. 미지정 시 --english-fonts-dir 사용. "
+                        "(전용 held-out 영어 폰트 디렉토리를 만들면 여기에 지정)")
+    p.add_argument("--val-samples", type=int, default=0,
+                   help="val 세트 총 샘플 수. 0=하위호환(val-batches × batch-size). "
+                        "이 안에서 한글:영어 비율은 --english-frac 그대로(학습과 동일).")
     p.add_argument("--val-batches", type=int, default=4,
-                   help="val eval 1회당 배치 수. val 샘플수 = val-batches × batch-size (고정·재현)")
+                   help="(하위호환) --val-samples 미지정 시 val 샘플수 = val-batches × batch-size")
     p.add_argument("--val-seed", type=int, default=1234,
                    help="val 세트 생성 시드(고정 → step 간 동일 샘플로 공정 비교)")
     return p
+
+
+def truncation_reason(sl_px, gl_px, max_img_len):
+    """get_model_inputs 의 clamp 와 **동일한** 계산으로 이 샘플이 잘리는지 판정.
+
+    잘림 조건(둘 중 하나라도):
+      - style_len > max_img_len//2           → style 이 예산 절반에 잘림
+      - gen_len   > max_img_len - style - 16 → 남은 예산(SOG/EOG 16px 제외)에 gen 이 잘림
+    (단위: 모두 픽셀. get_model_inputs 는 latent*8 로 픽셀 환산해 비교 → 여기도 픽셀.)
+
+    반환: None(안전) | (kind, have_px, budget_px)  kind ∈ {"style","gen"}
+    """
+    sl = min(int(sl_px), max_img_len // 2)
+    if int(sl_px) > sl:
+        return ("style", int(sl_px), max_img_len // 2)
+    remaining = max_img_len - sl - 16
+    if int(gl_px) > remaining:
+        return ("gen", int(gl_px), remaining)
+    return None
+
+
+def filter_no_truncation(sample, max_img_len):
+    """배치에서 잘릴 샘플을 제거한다(절대 truncation 금지 정책).
+
+    반환: (kept_sample[dict], dropped[list of (idx, kind, have, budget, style_text, gen_text)])
+    kept_sample 은 원본과 같은 키(list)들만 남긴 사본. 전부 잘리면 리스트가 빈다.
+    """
+    keys = ["style_img", "gen_img", "style_text", "gen_text", "style_img_len", "gen_img_len"]
+    n = len(sample["style_img"])
+    keep_idx, dropped = [], []
+    for i in range(n):
+        r = truncation_reason(sample["style_img_len"][i], sample["gen_img_len"][i], max_img_len)
+        if r is None:
+            keep_idx.append(i)
+        else:
+            kind, have, budget = r
+            dropped.append((i, kind, have, budget,
+                            sample["style_text"][i], sample["gen_text"][i]))
+    kept = {k: [sample[k][i] for i in keep_idx] for k in keys}
+    return kept, dropped
 
 
 @torch.no_grad()
@@ -108,13 +154,13 @@ def _evaluate(model, val_batches, device, max_img_len):
     for sample in val_batches:
         try:
             mi = model.get_model_inputs(
-                sample["style_img"], sample["same_img"],
-                sample["style_img_len"], sample["same_img_len"], max_img_len)
+                sample["style_img"], sample["gen_img"],
+                sample["style_img_len"], sample["gen_img_len"], max_img_len)
             dec = mi["decoder_inputs_embeds"].to(device)
             sp = mi["specials"].to(device)
             losses, _ = model.forward(
                 decoder_inputs_embeds_vae=dec, specials=sp,
-                style_text=sample["style_text"], gen_text=sample["same_text"])
+                style_text=sample["style_text"], gen_text=sample["gen_text"])
         except Exception as e:
             print(f"  [val skip] {e}")
             continue
@@ -126,6 +172,66 @@ def _evaluate(model, val_batches, device, max_img_len):
     if n == 0:
         return None
     return tot["loss"] / n, tot["mse"] / n, tot["ce"] / n
+
+
+def _load_or_build_val_samples(args, out_dir):
+    """고정 held-out val 세트를 만들거나 디스크에서 로드.
+
+    - 총 개수는 --val-samples(없으면 val-batches × batch-size).
+    - 그 안의 한글:영어 비율은 --english-frac(학습과 동일). 한글은 held-out 폰트
+      (--val-fonts-dir), 영어는 --val-english-fonts-dir(기본: 학습 영어 폰트).
+    - out_dir/val_set.pt 에 저장 → 이후 run 은 설정이 같으면 **재렌더 없이 로드**
+      (매 run 새로 샘플링하던 문제 제거 = step/run 간 완전히 동일한 val).
+    반환: (samples[list of dict], n_val)
+    """
+    from korean_split_dataset import make_dataset as _mk, make_english_dataset as _mken
+
+    n_val = args.val_samples if args.val_samples > 0 else args.val_batches * args.batch_size
+    en_fonts = args.val_english_fonts_dir or args.english_fonts_dir
+    sig = {
+        "n_val": n_val, "english_frac": float(args.english_frac),
+        "style_words": list(args.style_words), "gen_words": list(args.gen_words),
+        "val_seed": args.val_seed, "val_fonts_dir": args.val_fonts_dir,
+        "val_english_fonts_dir": en_fonts,
+    }
+    cache = out_dir / "val_set.pt"
+    if cache.exists():
+        blob = torch.load(cache, map_location="cpu", weights_only=False)
+        if blob.get("sig") == sig:
+            print(f"val set 로드(고정, 재렌더 없음): {cache} ({len(blob['samples'])} 샘플)")
+            return blob["samples"], n_val
+        print(f"val set 설정 변경 감지 → 재생성 ({cache})")
+
+    en_n = int(round(n_val * args.english_frac)) if args.english_frac > 0 else 0
+    ko_n = n_val - en_n
+
+    def _draw_safe(ds, target):
+        """잘리지 않는(truncation_reason=None) 샘플만 target 개 모은다. 잘림 샘플은 건너뛰고 재추첨."""
+        out, skipped, i, cap = [], 0, 0, target * 50 + 200
+        while len(out) < target and i < cap:
+            s = ds[i]; i += 1
+            if truncation_reason(int(s["style_img"].shape[-1]),
+                                 int(s["gen_img"].shape[-1]), args.max_img_len) is None:
+                out.append(s)
+            else:
+                skipped += 1
+        return out, skipped
+
+    samples, ko_skip, en_skip = [], 0, 0
+    if ko_n > 0:
+        kds = _mk(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
+                  length=ko_n * 60, seed=args.val_seed, fonts_dir=args.val_fonts_dir)
+        got, ko_skip = _draw_safe(kds, ko_n); samples += got
+    if en_n > 0:
+        eds = _mken(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
+                    length=en_n * 60, seed=args.val_seed + 777, fonts_dir=en_fonts)
+        got, en_skip = _draw_safe(eds, en_n); samples += got
+    # deterministic shuffle → 배치마다 한글/영어가 섞이게(비율 편중 방지)
+    random.Random(args.val_seed).shuffle(samples)
+    torch.save({"sig": sig, "samples": samples}, cache)
+    print(f"val set 생성·저장: {cache} (한글 {ko_n} + 영어 {en_n} = {len(samples)}개, "
+          f"truncation 으로 재추첨한 수: ko={ko_skip} en={en_skip})")
+    return samples, n_val
 
 
 def train(args):
@@ -252,14 +358,17 @@ def train(args):
             print(f"combined data: 한글폰트 {ko_len} + 영어폰트 {en_len} "
                   f"(english_frac={args.english_frac}, en fonts={en_ds.renderers_length})")
             if args.save_samples > 0:
-                dump_samples(ko_ds, args.save_samples, out_dir / "train_samples")
-                dump_samples(en_ds, max(4, args.save_samples // 2), out_dir / "train_samples_en")
+                dump_samples(ko_ds, args.save_samples, out_dir / "train_samples",
+                             model=model, max_img_len=args.max_img_len)
+                dump_samples(en_ds, max(4, args.save_samples // 2), out_dir / "train_samples_en",
+                             model=model, max_img_len=args.max_img_len)
         else:
             dataset = make_dataset(style_range=tuple(args.style_words),
                                    gen_range=tuple(args.gen_words),
                                    length=total_len, seed=args.seed + seed_off, legacy=args.legacy_transform)
             if args.save_samples > 0:
-                dump_samples(dataset, args.save_samples, out_dir / "train_samples")
+                dump_samples(dataset, args.save_samples, out_dir / "train_samples",
+                             model=model, max_img_len=args.max_img_len)
         if seed_off:
             print(f"online data seed: {args.seed} + offset {seed_off} (resume, 샘플 중복 방지)")
         collate = split_collate
@@ -269,6 +378,11 @@ def train(args):
     loader = DataLoader(
         dataset, batch_size=args.batch_size, shuffle=True,
         num_workers=args.num_workers, collate_fn=collate, drop_last=True,
+        # 입력 파이프라인 오버랩: 워커가 다음 배치를 미리 렌더(폰트 래스터화는 CPU 병목)
+        #   → GPU 가 forward 도는 동안 다음 배치 준비 = GPU 유휴 감소. (numerics 무관, 순수 I/O)
+        pin_memory=(device.type == "cuda"),
+        persistent_workers=(args.num_workers > 0),
+        prefetch_factor=(4 if args.num_workers > 0 else None),
     )
 
     # ── loss 로그: train_loss.csv (append, resume 시 이어 씀) ──
@@ -278,25 +392,50 @@ def train(args):
         loss_f.write("step,loss,mse,ce,it_s,timestamp\n")
     print(f"loss logged: {loss_csv}")
 
-    # ── validation 세트(고정): held-out 폰트에서 미리 N개 렌더해 메모리에 고정 ──
-    #    온라인 데이터는 매 호출 랜덤이라, 시작 시 한 번만 뽑아 고정 → step 간 동일 샘플로 공정 비교.
+    # ── truncation 로그: 잘릴 샘플은 학습에 안 쓰고 버림 + 전부 기록 (절대 truncation 금지 정책) ──
+    #   max_img_len 예산 초과로 style/gen 이 잘리는 샘플은 조기 EOG 등 학습을 오염시키므로 drop.
+    #   버린 샘플의 step/종류/길이/예산/텍스트를 CSV 로 남겨 몇개중 몇개·어떤 예인지 추적.
+    trunc_csv = out_dir / "truncated_samples.csv"
+    trunc_f = open(trunc_csv, "a", buffering=1)
+    if trunc_f.tell() == 0:
+        trunc_f.write("step,kind,have_px,budget_px,style_len,gen_len,style_text,gen_text,timestamp\n")
+    trunc_seen = 0      # 지금까지 본 총 샘플 수(=drop 후보 분모)
+    trunc_dropped = 0   # 그중 잘림으로 버린 수
+    print(f"truncation 로그: {trunc_csv} (max_img_len={args.max_img_len} → "
+          f"style≤{args.max_img_len//2}px, gen≤예산잔여; 초과 샘플은 drop)")
+
+    def _log_dropped(step, dropped, style_lens, gen_lens):
+        nonlocal trunc_dropped
+        ts = datetime.datetime.now().isoformat(timespec="seconds")
+        for (i, kind, have, budget, st, gt) in dropped:
+            trunc_dropped += 1
+            esc = lambda s: '"' + str(s).replace('"', "'") + '"'
+            trunc_f.write(f"{step},{kind},{have},{budget},{style_lens[i]},{gen_lens[i]},"
+                          f"{esc(st)},{esc(gt)},{ts}\n")
+
+    # ── validation 세트(고정): held-out 폰트에서 렌더 후 디스크에 저장 → run 간 재사용 ──
+    #    한글(unseen 폰트) + 영어(english_frac 비율, 학습과 동일). 매 run 새로 뽑던 문제 제거.
     val_batches = None
     val_f = None
     if args.online_split and args.val_every > 0:
-        from korean_split_dataset import make_dataset as _mk
-        n_val = args.val_batches * args.batch_size
-        vds = _mk(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
-                  length=n_val, seed=args.val_seed, fonts_dir=args.val_fonts_dir)
-        n_fonts = vds.renderers_length
-        flat = [vds[i % n_fonts] for i in range(n_val)]   # 폰트 순환 + 시드고정 → 재현
-        val_batches = [collate(flat[i:i + args.batch_size])
-                       for i in range(0, n_val, args.batch_size)]
+        from korean_split_dataset import dump_samples
+        val_samples, n_val = _load_or_build_val_samples(args, out_dir)
+        # 부분배치(bs 미만)는 forward shape 버그 회피 위해 제외
+        val_batches = [collate(val_samples[i:i + args.batch_size])
+                       for i in range(0, len(val_samples), args.batch_size)]
+        val_batches = [b for b in val_batches if len(b["style_img"]) == args.batch_size]
+        # 시각화: val 세트 샘플을 학습 샘플과 동일 포맷(montage)으로 저장
+        #   model 전달 → '모델이 실제로 받는 style(복원)' 열까지 저장(style-len fix end-to-end 확인)
+        dump_samples(val_samples, min(len(val_samples), args.save_samples or 12),
+                     out_dir / "val_samples", model=model, max_img_len=args.max_img_len)
         val_csv = out_dir / "val_loss.csv"
         val_f = open(val_csv, "a", buffering=1)
         if val_f.tell() == 0:
             val_f.write("step,val_loss,val_mse,val_ce,timestamp\n")
-        print(f"val: {len(val_batches)} batches × bs {args.batch_size} = {n_val} 샘플 "
-              f"(held-out {n_fonts} 폰트: {Path(args.val_fonts_dir).name}) → {val_csv}")
+        en_n = int(round(n_val * args.english_frac)) if args.english_frac > 0 else 0
+        print(f"val: {len(val_batches)} batches × bs {args.batch_size} "
+              f"(한글 {n_val - en_n} + 영어 {en_n}, held-out KO 폰트: "
+              f"{Path(args.val_fonts_dir).name}) → {val_csv}, 시각화 → {out_dir/'val_samples'}")
 
     def _run_val(step):
         if val_batches is None:
@@ -315,9 +454,13 @@ def train(args):
     t0 = time.time()
     last_log = t0
     losses_window = []
+    mse_window = []
+    ce_window = []
     accum = max(1, args.grad_accum)
     micro = 0          # 현재 virtual step 안에서 누적한 micro-batch 수
     acc_loss = 0.0     # virtual step 의 평균 loss 집계용
+    acc_mse = 0.0      # 〃 mse (loss 와 동일 스코프로 집계해야 loss=mse+ce 가 맞음)
+    acc_ce = 0.0       # 〃 ce
     print(f"virtual batch = {args.batch_size} x {accum} = {args.batch_size * accum}")
     optimizer.zero_grad(set_to_none=True)
 
@@ -326,11 +469,20 @@ def train(args):
             if step >= args.max_steps:
                 break
 
+            # ── 잘림 방지: 예산 초과로 style/gen 이 truncation 될 샘플은 배치에서 제거 + 기록 ──
+            trunc_seen += len(sample["style_img"])
+            orig_slen, orig_glen = sample["style_img_len"], sample["gen_img_len"]
+            sample, dropped = filter_no_truncation(sample, args.max_img_len)
+            if dropped:
+                _log_dropped(step, dropped, orig_slen, orig_glen)
+            if len(sample["style_img"]) == 0:
+                continue   # 배치가 통째로 잘림 대상 → skip
+
             # sample = list 들 (handb_collate)
             try:
                 model_inputs = model.get_model_inputs(
-                    sample["style_img"], sample["same_img"],
-                    sample["style_img_len"], sample["same_img_len"],
+                    sample["style_img"], sample["gen_img"],
+                    sample["style_img_len"], sample["gen_img_len"],
                     args.max_img_len,
                 )
             except Exception as e:
@@ -352,7 +504,7 @@ def train(args):
                     decoder_inputs_embeds_vae=decoder_inputs_embeds_vae,
                     specials=specials,
                     style_text=style_text,
-                    gen_text=sample["same_text"],
+                    gen_text=sample["gen_text"],
                 )
                 losses, pred_latent = out
                 loss = losses["loss"]
@@ -370,6 +522,8 @@ def train(args):
                 continue
 
             acc_loss += loss.item()
+            acc_mse += mse.item()
+            acc_ce += ce.item()
             micro += 1
             if micro < accum:
                 continue                    # 아직 virtual batch 미완성
@@ -378,17 +532,26 @@ def train(args):
             optimizer.step()
             optimizer.zero_grad(set_to_none=True)
             losses_window.append(acc_loss / accum)
+            mse_window.append(acc_mse / accum)
+            ce_window.append(acc_ce / accum)
             micro = 0
             acc_loss = 0.0
+            acc_mse = 0.0
+            acc_ce = 0.0
             step += 1
 
             if step % args.log_every == 0:
-                avg = sum(losses_window[-args.log_every:]) / min(len(losses_window), args.log_every)
+                n_win = min(len(losses_window), args.log_every)
+                avg = sum(losses_window[-args.log_every:]) / n_win
+                avg_mse = sum(mse_window[-args.log_every:]) / n_win
+                avg_ce = sum(ce_window[-args.log_every:]) / n_win
                 ips = args.log_every / (time.time() - last_log + 1e-9)
                 last_log = time.time()
-                print(f"step {step}/{args.max_steps}  loss={avg:.4f}  mse={mse.item():.4f}"
-                      f"  ce={ce.item():.4f}  {ips:.1f} it/s")
-                loss_f.write(f"{step},{avg:.6f},{mse.item():.6f},{ce.item():.6f},"
+                drop_rate = trunc_dropped / max(1, trunc_seen)
+                print(f"step {step}/{args.max_steps}  loss={avg:.4f}  mse={avg_mse:.4f}"
+                      f"  ce={avg_ce:.4f}  {ips:.1f} it/s"
+                      f"  truncated_drop={trunc_dropped}/{trunc_seen} ({drop_rate:.1%})")
+                loss_f.write(f"{step},{avg:.6f},{avg_mse:.6f},{avg_ce:.6f},"
                              f"{ips:.2f},{datetime.datetime.now().isoformat(timespec='seconds')}\n")
 
             if args.val_every > 0 and step % args.val_every == 0:
@@ -407,4 +570,7 @@ def train(args):
     loss_f.close()
     if val_f is not None:
         val_f.close()
+    trunc_f.close()
+    dr = trunc_dropped / max(1, trunc_seen)
+    print(f"truncation 최종: {trunc_dropped}/{trunc_seen} ({dr:.2%}) drop → {trunc_csv}")
     print(f"done. saved {final}  total {(time.time()-t0)/60:.1f} min")
