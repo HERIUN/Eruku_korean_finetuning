@@ -48,6 +48,7 @@ def main():
     ap.add_argument("--n", type=int, default=100)
     ap.add_argument("--cfg", type=float, default=1.0)
     ap.add_argument("--max-new-tokens", type=int, default=480)
+    ap.add_argument("--max-words", type=int, default=15, help="문장 최대 어절수(1~max, 올리면 긴 문장 robustness)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--english", action="store_true")
     ap.add_argument("--coherent", action="store_true", help="랜덤단어 대신 실제 문장 세그먼트(OCR 신뢰성↑)")
@@ -77,7 +78,7 @@ def main():
 
     model, step = load_model(args.ckpt, device)
     fonts = sorted(p for p in Path(args.fonts_dir).glob("*.ttf"))
-    texts = build_texts(args.n, rng, english=args.english, coherent=args.coherent)
+    texts = build_texts(args.n, rng, english=args.english, coherent=args.coherent, max_words=args.max_words)
 
     per = []   # (nw, cer_gen, cer_gt)
     done = 0

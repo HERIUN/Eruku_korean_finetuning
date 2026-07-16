@@ -58,9 +58,10 @@ technology continues to change the way people communicate work and live their ev
 children laughed and played in the park while their parents watched them from a nearby wooden bench .""".split("\n")
 
 
-def build_texts(n, rng, english=False, coherent=False):
-    """다양한 길이(어절 1~15)의 라인 n개. english=True 면 영어(pretrained 비교용).
-    coherent=True 면 실제 문장에서 세그먼트 추출(OCR 신뢰성↑, CER 덜 비관적)."""
+def build_texts(n, rng, english=False, coherent=False, max_words=15):
+    """다양한 길이(어절 1~max_words)의 라인 n개. english=True 면 영어(pretrained 비교용).
+    coherent=True 면 실제 문장에서 세그먼트 추출(OCR 신뢰성↑, CER 덜 비관적).
+    max_words 올리면 더 긴 문장으로 길이 robustness 측정."""
     import re as _re
     if coherent:
         base = ([" ".join(_re.findall(r"[A-Za-z0-9']+", s)) for s in EN_COHERENT] if english
@@ -68,7 +69,7 @@ def build_texts(n, rng, english=False, coherent=False):
                       .read_text(encoding="utf-8").splitlines() if ln.strip()])
         out = []
         for i in range(n):
-            nw = 1 + (i % 15)
+            nw = 1 + (i % max_words)
             words = rng.choice(base).split()
             if len(words) <= nw:
                 seg = words
@@ -87,7 +88,7 @@ def build_texts(n, rng, english=False, coherent=False):
         nums = lambda: rng.choice(["2024년", "98.7%", "4,500원", "123", "010-1234-5678", "15:30"])
     out = []
     for i in range(n):
-        nw = 1 + (i % 15)                       # 어절수 1~15 균등 분포
+        nw = 1 + (i % max_words)                # 어절수 1~max_words 균등 분포
         toks = [rng.choice(words) for _ in range(nw)]
         if nw >= 3 and rng.random() < 0.3:      # 가끔 숫자 섞기
             toks[rng.randrange(nw)] = nums()
@@ -110,6 +111,7 @@ def main():
     ap.add_argument("--n", type=int, default=100)
     ap.add_argument("--cfg", type=float, default=1.0)
     ap.add_argument("--max-new-tokens", type=int, default=320)
+    ap.add_argument("--max-words", type=int, default=15, help="문장 최대 어절수(1~max, 올리면 긴 문장 robustness)")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--no-style-text", action="store_true")
     ap.add_argument("--english", action="store_true", help="영어 전용 텍스트로 평가(pretrained 공정비교용)")
@@ -129,7 +131,7 @@ def main():
     incep = InceptionV3([InceptionV3.BLOCK_INDEX_BY_DIM[2048]]).to(device).eval()
 
     fonts = sorted(p for p in Path(args.fonts_dir).glob("*.ttf"))
-    texts = build_texts(args.n, rng, english=args.english, coherent=args.coherent)
+    texts = build_texts(args.n, rng, english=args.english, coherent=args.coherent, max_words=args.max_words)
 
     feats_gt, feats_gen = [], []
     # BFID(HWD 공식): Otsu 이진화 후 FID — 배경 무시, 폰트충실도. gen/gt 를 임시폴더에 저장 후 일괄 계산.
