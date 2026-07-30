@@ -235,22 +235,47 @@ on its own, while a Korean HTR loss biases the shared decoder and degrades Engli
 
 ## Usage
 
-### Minimum requirements
+### Minimum — what the VAE strictly requires
 
-Three things must hold or the VAE gives you garbage. Everything else is convention.
+Three things, and nothing else:
 
 | requirement | if broken |
 |---|---|
 | **3 input channels** (repeat your grayscale line 3x) | hard error: `expected input[1, 1, 64, 872] to have 3 channels` |
 | **dark ink on a light background** | total collapse — inverted input scores MSE 0.67 / SSIM 0.05 (vs 0.004 / 0.97) |
-| **values near unit scale** ([0, 1] or [-1, 1], both fine) | raw 0-255 input breaks the latents (cosine 0.55 to the correct ones, latent std 1.04 -> 0.53) |
+| **values near unit scale** ([0, 1] or [-1, 1], both work) | raw 0-255 input breaks the latents (cosine 0.55 to the correct ones, latent std 1.04 -> 0.53) |
 
-Copy these two helpers and you can forget the rest:
+That is all it takes to run:
 
 ```python
 from diffusers import AutoencoderKL
 from PIL import Image
-import numpy as np, torch, torch.nn.functional as F
+import numpy as np, torch
+
+vae = AutoencoderKL.from_pretrained("{VAE_REPO}").eval().cuda()
+
+g = Image.open("line.png").convert("L")                       # dark ink, light background
+x = torch.from_numpy(np.array(g, np.float32) / 255.0)[None, None].repeat(1, 3, 1, 1)
+
+with torch.no_grad():
+    z = vae.encode(x.cuda()).latent_dist.mode()               # [1, 1, H/8, W/8]
+    rec = vae.decode(z).sample[:, :1]                         # decoder returns 1 channel
+
+print(tuple(x.shape), "->", tuple(z.shape), "->", tuple(rec.shape))
+# a 99px-tall scan: (1, 3, 99, 1347) -> (1, 1, 12, 168) -> (1, 1, 96, 1344)
+#   note the height is floored to a multiple of 8, and 12 latent rows != Eruku's 8
+```
+
+No resizing, no normalisation, no padding. It works — but the reconstruction is only good if
+your line already happens to be about 64px tall, which is what the next section fixes.
+
+### Recommended — resize to height 64 first
+
+This is the one preprocessing step with a large measured effect, because the VAE was trained on
+64px lines. Everything else you might be tempted to add is optional (see the table below).
+
+```python
+import torch.nn.functional as F
 
 def to_vae_input(image, height=64):
     # PIL text-line image -> [1, 3, height, W] in [-1, 1], width padded to a multiple of 8
@@ -264,17 +289,11 @@ def to_vae_input(image, height=64):
 def to_pil(t):
     # VAE output [1, 1, H, W] in [-1, 1] -> grayscale PIL image
     return Image.fromarray((((t[0, 0].clamp(-1, 1) + 1) / 2) * 255).byte().cpu().numpy())
-```
 
-Then a roundtrip is three lines:
-
-```python
-vae = AutoencoderKL.from_pretrained("{VAE_REPO}").eval().cuda()
 x = to_vae_input(Image.open("line.png"))
-
 with torch.no_grad():
     z = vae.encode(x.cuda()).latent_dist.mode()      # [1, 1, 8, W/8]  (.sample() adds noise)
-    rec = vae.decode(z).sample[:, :1]                # decoder returns 1 channel
+    rec = vae.decode(z).sample[:, :1]
 
 to_pil(rec).save("line_recon.png")
 print(tuple(x.shape), "->", tuple(z.shape), "->", tuple(rec.shape))
@@ -282,29 +301,45 @@ print(tuple(x.shape), "->", tuple(z.shape), "->", tuple(rec.shape))
 ```
 
 One latent column covers 8 pixels and carries 8 dims — that column sequence is exactly what
-Eruku conditions on and predicts.
+Eruku conditions on and predicts. **If you are feeding Eruku, height 64 is not optional**: the
+latent row count follows the input height and its interface expects 8.
 
-### What actually improves fidelity
+### What the recommended version actually buys
 
-Swept one knob at a time — roundtrip MSE / SSIM against the same preprocessed input,
-12 clean font lines and 20 real scanned lines:
+12 clean font lines + 20 real scanned lines, each reconstruction resampled to a common 64px
+canvas and compared against the same reference (so different input resolutions stay comparable):
+
+| preprocessing | font lines MSE / SSIM | scans MSE / SSIM |
+|---|---|---|
+| minimum (native size, [0, 1]) | 0.1417 / 0.481 | 0.0170 / 0.806 |
+| + resize to height 64 | **0.0047 / 0.967** | **0.0042 / 0.937** |
+| + [-1, 1] and width padding (recommended) | **0.0044 / 0.970** | 0.0059 / 0.943 |
+
+So the resize is worth ~30x in MSE on clean lines (0.1417 -> 0.0047); the normalisation and
+padding on top of it are within noise. Their real purpose is elsewhere: `[-1, 1]` matches the
+convention Eruku was trained with, and the padding keeps the output width equal to the input.
+
+HTR-reader CER does *not* separate these variants (0.026 / 0.041 / 0.044 on font lines — all
+readable, differences are noise; on our scans the reader's own floor is 0.401), so the pixel
+metrics above are the ones to go by.
+
+### Everything else we swept — no effect or harmful
 
 | knob | verdict |
 |---|---|
-| **height 64** | keep it. 48 is 7x worse (MSE 0.0305 vs 0.0045); 80 and 96 buy nothing (0.0051 / 0.0045) and change the latent row count, which breaks Eruku's 8-dims-per-column interface |
-| **resize filter** | almost irrelevant among smooth filters: bilinear 0.0044, bicubic 0.0044, Lanczos 0.0045, area 0.0051 (font lines). Only nearest-neighbour is clearly bad (0.0063). Any of the first three is fine |
-| **leave the contrast alone** | every "cleanup" made it worse: Otsu binarisation 0.0072, autocontrast 0.0042, min-max stretch 0.0036, untouched 0.0034. The decoder already snaps ink to crisp black — pre-binarising only throws away the grey levels it uses |
-| **[-1, 1] vs [0, 1]** | equivalent in practice: latents differ with cosine 0.9997 and reconstruction is identical (0.0045 vs 0.0046). A GroupNorm right after the first conv absorbs a global shift/scale |
-| **pad width to a multiple of 8** | no fidelity effect; it only keeps the output width equal to the input. Without it the encoder floors the width and you get back up to 7px less (871 -> 864) |
+| **resize filter** | almost irrelevant among smooth filters: bilinear 0.0044, bicubic 0.0044, Lanczos 0.0045, area 0.0051 (font lines). Only nearest-neighbour is clearly bad (0.0063) |
+| **other heights** | 48 is 7x worse than 64 (0.0305 vs 0.0045); 80 and 96 buy nothing (0.0051 / 0.0045) and change the latent row count |
+| **contrast cleanup** | every attempt made it worse: Otsu binarisation 0.0072, autocontrast 0.0042, min-max stretch 0.0036, untouched 0.0034. The decoder already snaps ink to crisp black — pre-binarising just discards the grey levels it uses |
+| **[-1, 1] vs [0, 1]** | latents differ with cosine 0.9997, reconstruction identical (0.0045 vs 0.0046). A GroupNorm right after the first conv absorbs a global shift/scale |
+| **width multiple of 8** | no fidelity effect; without it the encoder floors the width and you get back up to 7px less (871 -> 864) |
 
-Real scans reconstruct a little worse than clean font renders (0.0058 vs 0.0045 here) and the
-decoder does not preserve faint or pencil strokes — it snaps ink to crisp black.
+Real scans reconstruct a little worse than clean font renders and the decoder does not preserve
+faint or pencil strokes — it snaps ink to crisp black.
 
-If you are feeding **Eruku** rather than reconstructing, also crop scan margins to the ink
-bounding box: empty margins inflate the latent std and make generation run away. The paired
-model does this for you (`bbox_crop=True`). Note that cropping is not comparable in the table
-above — it raises ink coverage from 1.5% to 6.0% of pixels, so per-pixel MSE rises by
-construction.
+If you are feeding **Eruku**, also crop scan margins to the ink bounding box: empty margins
+inflate the latent std and make generation run away. The paired model does this for you
+(`bbox_crop=True`). Cropping is not comparable in these tables — it raises ink coverage from
+1.5% to 6.0% of pixels, so per-pixel MSE rises by construction.
 
 To generate handwriting rather than reconstruct it, use the paired model
 [`{MODEL_REPO}`](https://huggingface.co/{MODEL_REPO}) — it loads this VAE automatically and
