@@ -334,8 +334,8 @@ img.save("out.png")
 ## Results
 
 CER measured with a Korean HTR reader (floor on font renders ~0.00; easyocr saturates at
-0.236 even on Korean ground truth and cannot be used). n=100 per bucket, cfg=1.0, coherent
-sentences, seen fonts.
+0.236 even on Korean ground truth and cannot be used). n=100 sentences split into length
+buckets, cfg=1.0, coherent sentences, seen fonts.
 
 | bucket | decoder-only VAE | full VAE, before re-adaptation | **this model** |
 |---|---|---|---|
