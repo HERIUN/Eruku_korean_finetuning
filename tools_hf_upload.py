@@ -323,12 +323,38 @@ HTR-reader CER does *not* separate these variants (0.026 / 0.041 / 0.044 on font
 readable, differences are noise; on our scans the reader's own floor is 0.401), so the pixel
 metrics above are the ones to go by.
 
+### Going above height 64 keeps improving reconstruction
+
+Height 64 is what the VAE was trained on and what Eruku requires — but for standalone
+reconstruction it is not the optimum. Each reconstruction was resampled back to the source's
+native resolution and compared there, so taller inputs get no free advantage:
+
+| input height | latent rows | font lines, native 176px | real scans, native 99px |
+|---|---|---|---|
+| 48 | 6 | 0.0941 / 0.703 | 0.0049 / 0.947 |
+| **64** (training resolution) | 8 | 0.0377 / 0.812 | 0.0035 / 0.968 |
+| 80 | 10 | 0.0165 / 0.875 | 0.0032 / 0.975 |
+| 96 | 12 | 0.0105 / 0.906 | **0.0033 / 0.976** |
+| 128 | 16 | 0.0051 / 0.936 | 0.0036 / 0.974 |
+| 192 | 24 | **0.0021 / 0.956** | 0.0042 / 0.960 |
+
+(MSE / SSIM, 12 font lines and 10 scanned lines.)
+
+The pattern is about **pixels per glyph**, not the number 64: a taller canvas gives the encoder
+more pixels for the same characters, so fidelity keeps climbing — as long as the source really
+has that resolution. The font lines are rendered at 176px native and improve all the way to 192
+(MSE 18x lower than at 64). The scans are only 99px native, so they peak around 80-96 and then
+get slowly worse: upscaling past the source adds no information and moves further from the
+training scale. Cost grows with the latent area, roughly (height / 64)^2 for the same line.
+
+So: **feeding Eruku -> height 64, no choice. Reconstruction only -> use the source's native
+height (capped around 128-192)** and you get a much better roundtrip.
+
 ### Everything else we swept — no effect or harmful
 
 | knob | verdict |
 |---|---|
 | **resize filter** | almost irrelevant among smooth filters: bilinear 0.0044, bicubic 0.0044, Lanczos 0.0045, area 0.0051 (font lines). Only nearest-neighbour is clearly bad (0.0063) |
-| **other heights** | 48 is 7x worse than 64 (0.0305 vs 0.0045); 80 and 96 buy nothing (0.0051 / 0.0045) and change the latent row count |
 | **contrast cleanup** | every attempt made it worse: Otsu binarisation 0.0072, autocontrast 0.0042, min-max stretch 0.0036, untouched 0.0034. The decoder already snaps ink to crisp black — pre-binarising just discards the grey levels it uses |
 | **[-1, 1] vs [0, 1]** | latents differ with cosine 0.9997, reconstruction identical (0.0045 vs 0.0046). A GroupNorm right after the first conv absorbs a global shift/scale |
 | **width multiple of 8** | no fidelity effect; without it the encoder floors the width and you get back up to 7px less (871 -> 864) |
