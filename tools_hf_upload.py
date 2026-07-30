@@ -350,6 +350,24 @@ training scale. Cost grows with the latent area, roughly (height / 64)^2 for the
 So: **feeding Eruku -> height 64, no choice. Reconstruction only -> use the source's native
 height (capped around 128-192)** and you get a much better roundtrip.
 
+### What Eruku itself does with this VAE
+
+For reference, the paired model's own preprocessing (`generate_handwriting`) and the training
+pipeline agree on every load-bearing point, so the recommended settings above are exactly the
+distribution this VAE saw:
+
+| step | training pipeline | `generate_handwriting` |
+|---|---|---|
+| height | 64 (bilinear, antialias) | 64 (Lanczos) |
+| value range | `Normalize(0.5, 0.5)` -> [-1, 1] | same, applied inside the model |
+| channels | 3 | 3 (`convert("RGB")`) |
+| polarity | dark ink on light paper | unchanged from your input |
+| width padding to a multiple of 8 | **none** | **none** |
+
+Note the last row: **do not pad the width when conditioning Eruku.** Padding would append a
+white latent column that training never produced. The padding in the recommended snippet above
+exists only so a reconstruction comes back at exactly the input width.
+
 ### Everything else we swept — no effect or harmful
 
 | knob | verdict |
@@ -514,6 +532,9 @@ img.save("out.png")
 - `bbox_crop=True` (default) crops the style image to its ink bounding box. Real scans carry
   page margins that blow up the VAE latent std and make generation run away or come back
   blank; this closes that gap. Pass `bbox_crop=False` for crops that already fill the frame.
+- Preprocessing is handled for you and matches training: the style image is converted to RGB,
+  resized to height 64, and normalised to [-1, 1] before it reaches the VAE. Width is *not*
+  padded to a multiple of 8 — training never padded either, so do not add it.
 
 ## Results
 
