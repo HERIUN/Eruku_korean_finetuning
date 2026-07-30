@@ -316,8 +316,10 @@ canvas and compared against the same reference (so different input resolutions s
 | + [-1, 1] and width padding (recommended) | **0.0044 / 0.970** | 0.0059 / 0.943 |
 
 So the resize is worth ~30x in MSE on clean lines (0.1417 -> 0.0047); the normalisation and
-padding on top of it are within noise. Their real purpose is elsewhere: `[-1, 1]` matches the
-convention Eruku was trained with, and the padding keeps the output width equal to the input.
+padding on top of it are within noise — including for Eruku generation, which we checked
+separately (CER 0.045 with [0, 1] vs 0.046 with [-1, 1] over 24 lines). They are kept because
+`[-1, 1]` is the convention training used and the padding returns a reconstruction at exactly the
+input width, not because they buy fidelity.
 
 HTR-reader CER does *not* separate these variants (0.026 / 0.041 / 0.044 on font lines — all
 readable, differences are noise; on our scans the reader's own floor is 0.401), so the pixel
@@ -374,7 +376,7 @@ exists only so a reconstruction comes back at exactly the input width.
 |---|---|
 | **resize filter** | almost irrelevant among smooth filters: bilinear 0.0044, bicubic 0.0044, Lanczos 0.0045, area 0.0051 (font lines). Only nearest-neighbour is clearly bad (0.0063) |
 | **contrast cleanup** | every attempt made it worse: Otsu binarisation 0.0072, autocontrast 0.0042, min-max stretch 0.0036, untouched 0.0034. The decoder already snaps ink to crisp black — pre-binarising just discards the grey levels it uses |
-| **[-1, 1] vs [0, 1]** | latents differ with cosine 0.9997, reconstruction identical (0.0045 vs 0.0046). A GroupNorm right after the first conv absorbs a global shift/scale |
+| **[-1, 1] vs [0, 1]** | interchangeable. Latents differ only with cosine 0.9997, reconstruction is the same (MSE 0.0048 vs 0.0058, SSIM 0.946 vs 0.951, n=32), and **Eruku generation is unaffected** too (CER 0.045 vs 0.046 over 24 lines; 21 of 24 scored identically). A GroupNorm right after the first conv absorbs a global shift/scale. Training used [-1, 1], so that stays the default here |
 | **width multiple of 8** | no fidelity effect; without it the encoder floors the width and you get back up to 7px less (871 -> 864) |
 
 Real scans reconstruct a little worse than clean font renders and the decoder does not preserve
