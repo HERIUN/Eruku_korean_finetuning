@@ -235,9 +235,17 @@ on its own, while a Korean HTR loss biases the shared decoder and degrades Engli
 
 ## Usage
 
-Only two things are actually load-bearing: the encoder wants **3 channels**, and pixel values
-must be roughly **unit-scale**. Everything else below is convention. Copy these two helpers and
-you can forget all of it:
+### Minimum requirements
+
+Three things must hold or the VAE gives you garbage. Everything else is convention.
+
+| requirement | if broken |
+|---|---|
+| **3 input channels** (repeat your grayscale line 3x) | hard error: `expected input[1, 1, 64, 872] to have 3 channels` |
+| **dark ink on a light background** | total collapse — inverted input scores MSE 0.67 / SSIM 0.05 (vs 0.004 / 0.97) |
+| **values near unit scale** ([0, 1] or [-1, 1], both fine) | raw 0-255 input breaks the latents (cosine 0.55 to the correct ones, latent std 1.04 -> 0.53) |
+
+Copy these two helpers and you can forget the rest:
 
 ```python
 from diffusers import AutoencoderKL
@@ -249,7 +257,7 @@ def to_vae_input(image, height=64):
     g = image.convert("L")
     w = max(1, round(height * g.width / g.height))
     x = torch.from_numpy(np.array(g, dtype=np.float32) / 255.0)[None, None]
-    x = F.interpolate(x, size=(height, w), mode="bilinear", align_corners=False).clamp(0, 1)
+    x = F.interpolate(x, size=(height, w), mode="bicubic", align_corners=False).clamp(0, 1)
     x = F.pad(x * 2 - 1, (0, -w % 8), value=1.0)     # [-1,1], white pad
     return x.repeat(1, 3, 1, 1)                       # encoder wants 3 channels
 
@@ -276,24 +284,32 @@ print(tuple(x.shape), "->", tuple(z.shape), "->", tuple(rec.shape))
 One latent column covers 8 pixels and carries 8 dims — that column sequence is exactly what
 Eruku conditions on and predicts.
 
-### Which of those conventions actually matter
+### What actually improves fidelity
 
-Measured by breaking one at a time (roundtrip MSE against the same input, one clean font line):
+Swept one knob at a time — roundtrip MSE / SSIM against the same preprocessed input,
+12 clean font lines and 20 real scanned lines:
 
-| convention | reality |
+| knob | verdict |
 |---|---|
-| 3 input channels | **required.** Anything else is a hard error (`expected input[1, 1, 64, 872] to have 3 channels`). Repeat your grayscale line 3x |
-| values in [-1, 1] | **barely matters.** Feeding [0, 1] instead gives latents with cosine 0.9997 to the convention and identical reconstruction (MSE 0.0045 vs 0.0046) — a GroupNorm right after the first conv absorbs a global shift/scale. But stay near unit scale: raw 0-255 input does break it (cosine 0.55, latent std 1.04 -> 0.53) |
-| height 64 | **required only for Eruku.** Latent rows = height / 8, and Eruku's interface expects 8. Standalone the VAE takes any height: 96 costs a little (MSE 0.0072 vs 0.0046), but 32 is much worse (0.127) — never go below 64 |
-| width a multiple of 8 | **cosmetic.** Fidelity is unchanged; the output is just up to 7px narrower than the input (871 -> 864), since the encoder floors the width to a latent column |
+| **height 64** | keep it. 48 is 7x worse (MSE 0.0305 vs 0.0045); 80 and 96 buy nothing (0.0051 / 0.0045) and change the latent row count, which breaks Eruku's 8-dims-per-column interface |
+| **resize filter** | almost irrelevant among smooth filters: bilinear 0.0044, bicubic 0.0044, Lanczos 0.0045, area 0.0051 (font lines). Only nearest-neighbour is clearly bad (0.0063). Any of the first three is fine |
+| **leave the contrast alone** | every "cleanup" made it worse: Otsu binarisation 0.0072, autocontrast 0.0042, min-max stretch 0.0036, untouched 0.0034. The decoder already snaps ink to crisp black — pre-binarising only throws away the grey levels it uses |
+| **[-1, 1] vs [0, 1]** | equivalent in practice: latents differ with cosine 0.9997 and reconstruction is identical (0.0045 vs 0.0046). A GroupNorm right after the first conv absorbs a global shift/scale |
+| **pad width to a multiple of 8** | no fidelity effect; it only keeps the output width equal to the input. Without it the encoder floors the width and you get back up to 7px less (871 -> 864) |
+
+Real scans reconstruct a little worse than clean font renders (0.0058 vs 0.0045 here) and the
+decoder does not preserve faint or pencil strokes — it snaps ink to crisp black.
+
+If you are feeding **Eruku** rather than reconstructing, also crop scan margins to the ink
+bounding box: empty margins inflate the latent std and make generation run away. The paired
+model does this for you (`bbox_crop=True`). Note that cropping is not comparable in the table
+above — it raises ink coverage from 1.5% to 6.0% of pixels, so per-pixel MSE rises by
+construction.
 
 To generate handwriting rather than reconstruct it, use the paired model
 [`{MODEL_REPO}`](https://huggingface.co/{MODEL_REPO}) — it loads this VAE automatically and
 does the preprocessing for you.
 
-The metrics above the figures are measured on clean font renders. Real scanned handwriting
-reconstructs noticeably worse (roundtrip MSE ~0.016 on our 20-line scan probe): the decoder
-snaps ink to crisp black and does not preserve faint or pencil strokes.
 
 > **Warning — latent space moved.** This was trained with `--train-part full`
 > (encoder + decoder), so its latents are **not interchangeable** with the original
