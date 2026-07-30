@@ -235,10 +235,43 @@ on its own, while a Korean HTR loss biases the shared decoder and degrades Engli
 
 ## Usage
 
+Roundtrip a text-line image through the VAE (encode -> decode). Input conventions are
+inherited from `emuru_vae`: **height 64**, values in **[-1, 1]** (background +1, ink -1),
+**3 input channels** (feed the grayscale line repeated 3x) and **1 output channel**. Width must
+be a multiple of 8 — one latent column covers 8 pixels and carries 8 dims, which is exactly
+what Eruku conditions on and predicts.
+
 ```python
 from diffusers import AutoencoderKL
-vae = AutoencoderKL.from_pretrained("{VAE_REPO}")
+from PIL import Image
+import numpy as np, torch, torch.nn.functional as F
+
+vae = AutoencoderKL.from_pretrained("{VAE_REPO}").eval().cuda()
+
+# 1. one text line -> [1, 1, 64, W] in [-1, 1]
+img = Image.open("line.png").convert("L")            # a single line of text
+w = max(1, round(64 * img.width / img.height))
+x = torch.from_numpy(np.array(img, dtype=np.float32) / 255.0)[None, None]
+x = F.interpolate(x, size=(64, w), mode="bilinear", align_corners=False).clamp(0, 1) * 2 - 1
+x = F.pad(x, (0, -w % 8), value=1.0)                 # pad to a multiple of 8 with white
+
+# 2. encode -> latent [1, 1, 8, W/8] -> decode
+with torch.no_grad():
+    z = vae.encode(x.repeat(1, 3, 1, 1).cuda()).latent_dist.mode()   # .sample() to draw noise
+    rec = vae.decode(z).sample.clamp(-1, 1)[:, :1].cpu()
+
+# 3. back to an image
+Image.fromarray((((rec[0, 0] + 1) / 2) * 255).byte().numpy()).save("line_recon.png")
+print(tuple(x.shape), "->", tuple(z.shape), "->", tuple(rec.shape))
+# (1, 1, 64, 872) -> (1, 1, 8, 109) -> (1, 1, 64, 872)
 ```
+
+To generate handwriting rather than reconstruct it, use the paired model
+[`{MODEL_REPO}`](https://huggingface.co/{MODEL_REPO}) — it loads this VAE automatically.
+
+The numbers above are measured on clean font renders. Real scanned handwriting reconstructs
+noticeably worse (roundtrip MSE ~0.016 on our 20-line scan probe): the decoder snaps ink to
+crisp black and does not preserve faint or pencil strokes.
 
 > **Warning — latent space moved.** This was trained with `--train-part full`
 > (encoder + decoder), so its latents are **not interchangeable** with the original
