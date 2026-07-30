@@ -532,11 +532,26 @@ n=100, cfg=1.0, coherent:
 (원본 `blowing-up-groundhogs/emuru_vae` 를 가리킨 채 T5 만 갈면 생성이 무너진다).
 
 ```bash
-# 1) VAE 먼저 (상위 repo 로드가 이걸 요구)
-.venv/bin/python tools_hf_upload.py vae --push
+# 0) 카드용 before/after figure (영문 라벨, /tmp/relfig 에 4장)
+#    - VAE 복원: 원본 emuru_vae vs 릴리즈 VAE (한글/영어)
+for L in ko en; do CUDA_VISIBLE_DEVICES=0 .venv/bin/python _eval_vae_recon.py --lang $L --label-lang en \
+  --models "original=blowing-up-groundhogs/emuru_vae" "ours=finetune_runs/vae_korean_full_mse/vae_s28000" \
+  --out /tmp/relfig/recon_$L.png; done
+#    - 생성: 원본 영어 pretrained(원본 VAE) vs 릴리즈(한글 VAE + 재적응 T5)
+PRE=$(ls ~/.cache/huggingface/hub/models--blowing-up-groundhogs--eruku/snapshots/*/pytorch_model.bin | head -1)
+CUDA_VISIBLE_DEVICES=0 .venv/bin/python _eval_gen_compare.py --ckpt-before "$PRE" \
+  --ckpt-after finetune_runs/eruku_short_fullmse/checkpoint_step_030000.pth \
+  --label-before "BEFORE: original pretrained (English, original VAE)" \
+  --label-after "AFTER: this release (Korean VAE + re-adapted T5)" \
+  --col-labels "style reference (input)" "target (rendered in that font)" \
+  --row-label-fmt "style: {font}" "target: {text}" \
+  --cats ko_release en_release --n-rows 4 --out-dir /tmp/relfig
+
+# 1) VAE 먼저 (상위 repo 로드가 이걸 요구).  --figures-dir 주면 samples/ 로 올리고 카드에 삽입
+.venv/bin/python tools_hf_upload.py vae --figures-dir /tmp/relfig --push
 # 2) 상위 모델: 변환 → 키 정합성 assert(missing/unexpected 0) → 생성 parity → 업로드
 CUDA_VISIBLE_DEVICES=0 .venv/bin/python tools_hf_upload.py model --verify-cer   # dry-run
-.venv/bin/python tools_hf_upload.py model --push
+.venv/bin/python tools_hf_upload.py model --figures-dir /tmp/relfig --push
 ```
 
 - 변환 시 로컬 학습 클래스에만 있는 `t5_to_ocr.*`(alpha=1.0 이라 미사용) 1키를 strip 하고,

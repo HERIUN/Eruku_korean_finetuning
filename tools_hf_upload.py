@@ -12,12 +12,14 @@
 로 구조(하이퍼파라미터)만 받고, 가중치는 상위 repo 의 weight 파일에서 전부 덮인다.
 
 사용법:
-    # 1) VAE 먼저 (상위 repo 로드가 이걸 필요로 함)
-    .venv/bin/python tools_hf_upload.py vae --push
+    # 1) VAE 먼저 (상위 repo 로드가 이걸 필요로 함).
+    #    --figures-dir 를 주면 그 안의 before/after figure 를 samples/ 로 올리고 카드에 삽입
+    #    (figure 만드는 명령은 README 「HuggingFace 릴리즈」 절 0) 단계)
+    .venv/bin/python tools_hf_upload.py vae --figures-dir /tmp/relfig --push
 
-    # 2) 상위 모델: 변환 → 키 정합성 assert → (선택) 생성 parity 검증 → 업로드
-    .venv/bin/python tools_hf_upload.py model --verify-parity          # dry-run
-    .venv/bin/python tools_hf_upload.py model --push
+    # 2) 상위 모델: 변환 → 키 정합성 assert → (선택) 공개 API 로 CER 검증 → 업로드
+    .venv/bin/python tools_hf_upload.py model --verify-cer             # dry-run
+    .venv/bin/python tools_hf_upload.py model --figures-dir /tmp/relfig --push
 
 기본은 **dry-run**(로컬 스테이징 디렉토리만 생성). `--push` 를 줄 때만 실제 업로드하며
 토큰은 `HF_TOKEN` env 또는 `hf auth login` 캐시를 쓴다.
@@ -138,6 +140,29 @@ def patch_modeling(src: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 # 공통
 # ─────────────────────────────────────────────────────────────────────────────
+def _stage_figures(out: Path, figdir: Path, wanted: dict):
+    """figdir 의 figure 를 out/samples/ 로 복사. wanted = {카드에서 쓸 키: 파일명}.
+    없는 파일은 조용히 건너뛰고, 실제로 복사된 것만 {키: repo 내 경로} 로 돌려준다."""
+    got = {}
+    if not figdir or not figdir.exists():
+        return got
+    dst = out / "samples"
+    for key, name in wanted.items():
+        src = figdir / name
+        if src.exists():
+            dst.mkdir(parents=True, exist_ok=True)
+            shutil.copy(src, dst / name)
+            got[key] = f"samples/{name}"
+            print(f"[fig] samples/{name}  {src.stat().st_size/1e6:.2f}MB")
+        else:
+            print(f"[fig] 없음(건너뜀) {src}")
+    return got
+
+
+def _url(repo_id: str, path: str) -> str:
+    return f"https://huggingface.co/{repo_id}/resolve/main/{path}"
+
+
 def _api(token=None):
     from huggingface_hub import HfApi
     tok = token or os.environ.get("HF_TOKEN")
@@ -192,7 +217,7 @@ reconstruction error than Latin. This checkpoint removes most of that gap.
 | **this model** | **{NEW_KO_MSE}** | **{NEW_KO_SSIM}** | **{NEW_HARD_MSE}** | **{NEW_EN_MSE}** |
 
 English improves too, because the recipe is script-neutral (pure L1, no OCR loss).
-
+{FIGURES}
 ## Recipe
 
 ```
@@ -254,7 +279,34 @@ def cmd_vae(args):
     (out / "config.json").write_text(json.dumps(cfg, indent=2, ensure_ascii=False) + "\n")
     shutil.copy(w_p, out / "diffusion_pytorch_model.safetensors")   # trainer.pt(optimizer) 제외
 
-    card = VAE_CARD
+    figs = _stage_figures(out, Path(args.figures_dir) if args.figures_dir else None, {
+        "recon_ko": "recon_ko.png", "recon_en": "recon_en.png",
+        "gen_ko": "gencmp_ko_release.png", "gen_en": "gencmp_en_release.png"})
+    sec = []
+    if "recon_ko" in figs or "recon_en" in figs:
+        sec.append("\n### Before / after\n\nSame input, roundtrip through each VAE "
+                   "(source / original / this model), with per-line MSE and SSIM.\n\n")
+        if "recon_ko" in figs:
+            sec.append(f"Korean — the original smears dense syllables, this model keeps the strokes:\n\n"
+                       f"![Korean reconstruction]({_url(args.repo, figs['recon_ko'])})\n\n")
+        if "recon_en" in figs:
+            sec.append(f"English — the recipe is script-neutral, so Latin improves as well:\n\n"
+                       f"![English reconstruction]({_url(args.repo, figs['recon_en'])})\n\n")
+    if "gen_ko" in figs or "gen_en" in figs:
+        sec.append(f"\n### What it changes in generation\n\nThe VAE only sets the ceiling — the T5 "
+                   f"decoder must be re-adapted to reach it (its latent space moved). Original English "
+                   f"pretrained Eruku with the original VAE vs. the paired release "
+                   f"[`{args.model_repo}`](https://huggingface.co/{args.model_repo}), which uses this VAE. "
+                   f"Columns: style reference | target rendered in that font | before | after.\n\n")
+        if "gen_ko" in figs:
+            sec.append("Korean, with Korean-font style references — note the baseline has seen neither "
+                       "Hangul glyphs nor Korean-font styles:\n\n"
+                       f"![Korean generation]({_url(args.repo, figs['gen_ko'])})\n\n")
+        if "gen_en" in figs:
+            sec.append("English, with Latin style references that are in distribution for both models, "
+                       "so only the model differs — English survives, and strokes come out crisper:\n\n"
+                       f"![English generation]({_url(args.repo, figs['gen_en'])})\n\n")
+    card = VAE_CARD.replace("{FIGURES}", "".join(sec) if sec else "")
     for k, v in {"VAE_REPO": args.repo, "MODEL_REPO": args.model_repo,
                  "ORIG_KO_MSE": args.orig_ko, "ORIG_KO_SSIM": args.orig_ko_ssim,
                  "ORIG_HARD_MSE": args.orig_hard, "ORIG_EN_MSE": args.orig_en,
@@ -348,6 +400,7 @@ buckets, cfg=1.0, coherent sentences, seen fonts.
 Two things had to happen together: the Korean VAE raised the reconstruction ceiling
 (roundtrip MSE -83%), and a short-text-weighted re-adaptation of T5 closed the gap to that
 ceiling — short Korean strings were the actual bottleneck (CER 0.54 -> {KO_SHORT}).
+{FIGURES}
 
 ## How it was trained
 
@@ -450,7 +503,24 @@ def cmd_model(args):
         print(f"[model] config.json auto_map 보완 → {sorted(am)}")
     assert saved.get("vae_name_or_path") == args.vae_repo, saved.get("vae_name_or_path")
 
-    card = MODEL_CARD
+    figs = _stage_figures(out, Path(args.figures_dir) if args.figures_dir else None, {
+        "gen_ko": "gencmp_ko_release.png", "gen_en": "gencmp_en_release.png"})
+    sec = []
+    if figs:
+        sec.append("\n### Before / after\n\nSame target text through the original English pretrained "
+                   "Eruku (with the original VAE) and through this release. Columns: style reference | "
+                   "target rendered in that font | before | after.\n\n")
+        if "gen_ko" in figs:
+            sec.append("Korean, with Korean-font style references. The baseline has seen neither Hangul "
+                       "glyphs nor Korean-font styles, so it returns nothing usable:\n\n"
+                       f"![Korean generation]({_url(args.repo, figs['gen_ko'])})\n\n")
+        if "gen_en" in figs:
+            sec.append("English, with Latin style references that are in distribution for both models — "
+                       "English is kept, not traded away for Korean, and strokes come out crisper "
+                       "(the Korean VAE is a better decoder for Latin too):\n\n"
+                       f"![English generation]({_url(args.repo, figs['gen_en'])})\n\n")
+
+    card = MODEL_CARD.replace("{FIGURES}", "".join(sec) if sec else "")
     for k, v in {"MODEL_REPO": args.repo, "VAE_REPO": args.vae_repo, "STEPS": str(step),
                  "KO_ALL": args.ko_all, "KO_SHORT": args.ko_short, "KO_MID": args.ko_mid,
                  "KO_LONG": args.ko_long, "EN_ALL": args.en_all}.items():
@@ -561,6 +631,10 @@ def main():
     v.add_argument("--model-repo", default=DEF_MODEL_REPO)
     v.add_argument("--out", default="/tmp/hf_emuru_vae_korean")
     v.add_argument("--push", action="store_true")
+    v.add_argument("--figures-dir", default=None,
+                   help="카드에 넣을 figure 디렉토리. recon_{ko,en}.png(_eval_vae_recon.py --label-lang en) + "
+                        "gencmp_{ko,en}_release.png(_eval_gen_compare.py --cats ko_release en_release). "
+                        "있는 파일만 samples/ 로 올리고 카드에 삽입")
     # 모델카드 수치 (_eval_vae_recon.py 고정 probe 평균)
     v.add_argument("--orig-ko", default="0.0188"); v.add_argument("--orig-ko-ssim", default="0.904")
     v.add_argument("--orig-hard", default="0.0197"); v.add_argument("--orig-en", default="0.0020")
@@ -576,6 +650,9 @@ def main():
     m.add_argument("--code-from", default=DEF_MODEL_REPO, help="remote code(modeling/configuration) 출처 repo")
     m.add_argument("--out", default="/tmp/hf_eruku_korean")
     m.add_argument("--push", action="store_true")
+    m.add_argument("--figures-dir", default=None,
+                   help="카드에 넣을 생성 비교 figure 디렉토리(gencmp_{ko,en}_release.png). "
+                        "_eval_gen_compare.py --cats ko_release en_release 로 생성")
     m.add_argument("--bin", action="store_true", help="safetensors 대신 pytorch_model.bin 으로 저장")
     m.add_argument("--verify-cer", action="store_true",
                    help="변환본을 공개 API 로 돌려 한글 CER 측정 + bbox 크롭 smoke test (GPU 필요)")

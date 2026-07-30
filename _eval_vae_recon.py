@@ -98,6 +98,8 @@ def main():
                          '예: 원본=blowing-up-groundhogs/emuru_vae decoder=.../vae_dec/vae_s15000 full=.../vae_full/vae_s15000')
     ap.add_argument("--out", default=str(HERE / "finetune_runs/korean_en2ko_fixed/_eval/recon_ko.png"))
     ap.add_argument("--lang", choices=["ko", "en", "hard"], default="ko", help="ko=한글 / en=영어 / hard=극단폰트")
+    ap.add_argument("--label-lang", choices=["ko", "en"], default="ko",
+                    help="figure 안 고정 라벨/제목 언어. en = 공개(HF 모델카드) 용")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     args = ap.parse_args()
     dev = torch.device(args.device)
@@ -125,7 +127,7 @@ def main():
             return np.array(im)
         head = Image.new("L", (LW + w, 24), 235)
         ImageDraw.Draw(head).text((6, 3), f"[{Path(font).stem}] {text}", font=hdrf, fill=0)
-        parts = [np.array(head), strip(to_u8(x), "원본")]
+        parts = [np.array(head), strip(to_u8(x), "원본" if args.label_lang == "ko" else "source")]
         for lbl, vae in vaes:
             r = roundtrip(vae, x, dev)
             m, s = metrics(x, r)
@@ -138,7 +140,12 @@ def main():
     blocks = [np.hstack([b, np.full((b.shape[0], Wm - b.shape[1]), 255, np.uint8)]) if b.shape[1] < Wm else b
               for b in blocks]
     # 요약 헤더: 모델별 평균 MSE/SSIM + 첫 모델(보통 원본) 대비 증감
-    _langname = {"en": "영어", "hard": "극단폰트"}.get(args.lang, "한글")
+    if args.label_lang == "ko":
+        _langname = {"en": "영어", "hard": "극단폰트"}.get(args.lang, "한글")
+        _title = f"{_langname} VAE 복원 비교 (roundtrip, MSE↓/SSIM↑)   평균  "
+    else:
+        _langname = {"en": "English", "hard": "extreme fonts"}.get(args.lang, "Korean")
+        _title = f"{_langname} VAE reconstruction (roundtrip encode->decode, MSE lower / SSIM higher)   mean  "
     base = float(np.mean(agg[vaes[0][0]]["m"]))
     seg = []
     for lbl, _ in vaes:
@@ -149,8 +156,7 @@ def main():
             d = (mm / base - 1) * 100
             seg.append(f"{lbl} {mm:.4f}/{ss:.3f}({'+' if d > 0 else ''}{d:.0f}%)")
     summ = Image.new("L", (Wm, 30), 255)
-    ImageDraw.Draw(summ).text((6, 6), f"{_langname} VAE 복원 비교 (roundtrip, MSE↓/SSIM↑)   평균  " + "  |  ".join(seg),
-                              font=hdrf, fill=0)
+    ImageDraw.Draw(summ).text((6, 6), _title + "  |  ".join(seg), font=hdrf, fill=0)
     out = np.vstack([np.array(summ), np.full((3, Wm), 0, np.uint8)] + blocks)
     out = np.array(Image.fromarray(out).resize((Wm * 2, out.shape[0] * 2), Image.NEAREST))
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
