@@ -146,11 +146,29 @@ def build_samplers(style_range, gen_range, n_english=8000, seed=42):
     return style_s, gen_s
 
 
+def split_train_fonts(val_frac, seed=42, fonts_dir=None):
+    """학습 폰트를 (train_fonts, val_fonts) 리스트로 결정적 분할. val_frac = val 폰트 비율.
+
+    같은 (val_frac, seed) 면 항상 같은 분할 → run 간 재현 가능. val_frac=0 이면 val 은 빈 리스트."""
+    d = Path(fonts_dir) if fonts_dir else (ASSETS / "fonts_korean_v2/train")
+    fonts = sorted(p for p in d.glob("*") if p.suffix.lower() in (".ttf", ".otf"))
+    idx = list(range(len(fonts)))
+    random.Random(seed).shuffle(idx)
+    k = max(1, int(round(len(fonts) * val_frac))) if val_frac > 0 else 0
+    val_i = set(idx[:k])
+    return ([f for i, f in enumerate(fonts) if i not in val_i],
+            [f for i, f in enumerate(fonts) if i in val_i])
+
+
 def make_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, seed=42, fonts_dir=None, legacy=False):
-    """fonts_dir 미지정 시 학습 폰트(fonts_korean_v2/train). val 은 held-out 폰트 디렉토리 전달.
+    """fonts_dir: None=학습 폰트 전체(fonts_korean_v2/train) / 디렉토리 경로 / 폰트 경로 리스트
+    (split_train_fonts 의 분할 결과). held-out 은 fonts_korean_v2/test 디렉토리 전달.
     legacy=True: 원본 composite transform(데이터 정책 변경 전) 사용."""
     style_s, gen_s = build_samplers(style_range, gen_range, seed=seed)
-    fonts_dir = Path(fonts_dir) if fonts_dir else (ASSETS / "fonts_korean_v2/train")
+    if fonts_dir is None:
+        fonts_dir = ASSETS / "fonts_korean_v2/train"
+    elif not isinstance(fonts_dir, (list, tuple)):
+        fonts_dir = Path(fonts_dir)
     return KoreanSplitFontSquare(fonts_dir,
                                  str(ASSETS / "backgrounds"),
                                  style_s, gen_s, length=length, legacy=legacy)

@@ -1,20 +1,20 @@
 """google/fonts 폰트 수집기 (한글/영어 공용). `--lang ko|en`
 
 ko: korean subset family → github API 로 ttf 탐색 → KS X 1001(2350자) 커버리지 필터.
-    기존 보유(fonts_korean_v2/train + fonts_korean_unseen)와 중복 제거. staging 디렉토리에 저장.
+    기존 보유(fonts_korean_v2/train + fonts_korean_v2/test)와 중복 제거. staging 디렉토리에 저장.
 en: korean 미포함 + latin 포함 family 중 Handwriting/Display 우선(손글씨 도메인 직결)
     → raw URL 추정 다운로드(API rate-limit 회피) → 라틴 소문자 커버리지 확인.
 
 사용:
-  .venv/bin/python tools_fetch_gf.py --lang ko --out assets/fonts_korean_gf_new
-  .venv/bin/python tools_fetch_gf.py --lang en --out assets/fonts_english --n-hand 150 --n-disp 50
+  .venv/bin/python assets/download_script/tools_fetch_gf.py --lang ko --out assets/fonts_korean_gf_new
+  .venv/bin/python assets/download_script/tools_fetch_gf.py --lang en --out assets/fonts_english --n-hand 150 --n-disp 50
 """
 from __future__ import annotations
 import argparse, json, re, time, urllib.request
 from pathlib import Path
 from fontTools.ttLib import TTFont
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parents[2]  # repo root (스크립트는 assets/download_script/ 아래)
 UA = {"User-Agent": "Mozilla/5.0 (font-fetch)"}
 RAW = "https://raw.githubusercontent.com/google/fonts/main"
 META_URL = "https://fonts.google.com/metadata/fonts"
@@ -58,7 +58,7 @@ def load_meta(meta_cache=None):
 def fetch_korean(args):
     out = Path(args.out); out.mkdir(parents=True, exist_ok=True)
     existing = {norm(p.stem) for p in (HERE / "assets/fonts_korean_v2/train").glob("*.ttf")}
-    existing |= {norm(p.stem) for p in (HERE / "assets/fonts_korean_unseen").glob("*.ttf")}
+    existing |= {norm(p.stem) for p in (HERE / "assets/fonts_korean_v2/test").glob("*.ttf")}
 
     meta = load_meta(args.meta)
     kor = [f for f in meta["familyMetadataList"] if "korean" in (f.get("subsets") or [])]

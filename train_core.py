@@ -42,6 +42,9 @@ def make_parser():
     p.add_argument("--lines-json", default=None, help="offline lines_json (online-split 시 불필요)")
     p.add_argument("--out", default="finetune_runs/korean")
     p.add_argument("--vae-checkpoint", default="blowing-up-groundhogs/emuru_vae")
+    p.add_argument("--reset-vae", action="store_true",
+                   help="resume/pretrained 로드 시 ckpt 의 vae.* 키를 strip → --vae-checkpoint 로 준 새 VAE 유지. "
+                        "한글적응 full VAE 교체 후 Eruku 재적응 시 필수(안 쓰면 ckpt 의 옛 VAE 가 덮어씀)")
     p.add_argument("--t5-checkpoint", default="google-t5/t5-large")
     p.add_argument("--eruku-pretrained", default="model_zoo/eruku_pretrained/000073688.pth",
                    help="영어 pretrained ckpt. 로컬에 없으면 HF blowing-up-groundhogs/eruku "
@@ -88,10 +91,16 @@ def make_parser():
     p.add_argument("--save-samples", type=int, default=0, help="학습 시작 시 데이터 샘플 N개 저장")
     # ── validation (held-out 폰트에서 val loss 측정) ──
     p.add_argument("--val-every", type=int, default=0,
-                   help="N virtual step 마다 held-out 폰트로 val loss 측정(0=비활성). "
+                   help="N virtual step 마다 val loss 측정(0=비활성). "
                         "online-split 일 때만 동작. val_loss.csv 에 기록")
-    p.add_argument("--val-fonts-dir", default=str(HERE / "assets" / "fonts_korean_unseen"),
-                   help="held-out(학습 미사용) 한글 폰트 디렉토리 = val 일반화 측정 대상")
+    p.add_argument("--val-fonts-dir", default=None,
+                   help="val 한글 폰트 디렉토리. 기본(None)=--val-font-frac 으로 학습 폰트에서 분할. "
+                        "held-out 일반화를 보려면 assets/fonts_korean_v2/test 지정 "
+                        "(test 폰트는 최종 평가 전용 권장)")
+    p.add_argument("--val-font-frac", type=float, default=0.1,
+                   help="--val-fonts-dir 미지정 시 학습 폰트에서 val 로 떼는 비율(val_seed 로 결정적 분할). "
+                        "val 폰트는 학습에서 제외 → 폰트 일반화 측정. 0=분할 안 함(전체 폰트로 학습, "
+                        "val 은 같은 폰트에서 텍스트만 val_seed 로 분리)")
     p.add_argument("--val-english-fonts-dir", default=None,
                    help="val 영어(라틴) 폰트 디렉토리. 미지정 시 --english-fonts-dir 사용. "
                         "(전용 held-out 영어 폰트 디렉토리를 만들면 여기에 지정)")
@@ -174,12 +183,12 @@ def _evaluate(model, val_batches, device, max_img_len):
     return tot["loss"] / n, tot["mse"] / n, tot["ce"] / n
 
 
-def _load_or_build_val_samples(args, out_dir):
+def _load_or_build_val_samples(args, out_dir, val_fonts=None):
     """고정 held-out val 세트를 만들거나 디스크에서 로드.
 
     - 총 개수는 --val-samples(없으면 val-batches × batch-size).
-    - 그 안의 한글:영어 비율은 --english-frac(학습과 동일). 한글은 held-out 폰트
-      (--val-fonts-dir), 영어는 --val-english-fonts-dir(기본: 학습 영어 폰트).
+    - 그 안의 한글:영어 비율은 --english-frac(학습과 동일). 한글 폰트는 --val-fonts-dir
+      (기본 None=학습 폰트, val_seed 로 텍스트만 분리), 영어는 --val-english-fonts-dir(기본: 학습 영어 폰트).
     - out_dir/val_set.pt 에 저장 → 이후 run 은 설정이 같으면 **재렌더 없이 로드**
       (매 run 새로 샘플링하던 문제 제거 = step/run 간 완전히 동일한 val).
     반환: (samples[list of dict], n_val)
@@ -192,6 +201,7 @@ def _load_or_build_val_samples(args, out_dir):
         "n_val": n_val, "english_frac": float(args.english_frac),
         "style_words": list(args.style_words), "gen_words": list(args.gen_words),
         "val_seed": args.val_seed, "val_fonts_dir": args.val_fonts_dir,
+        "val_font_names": sorted(p.name for p in val_fonts) if val_fonts else None,
         "val_english_fonts_dir": en_fonts,
     }
     cache = out_dir / "val_set.pt"
@@ -220,7 +230,8 @@ def _load_or_build_val_samples(args, out_dir):
     samples, ko_skip, en_skip = [], 0, 0
     if ko_n > 0:
         kds = _mk(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
-                  length=ko_n * 60, seed=args.val_seed, fonts_dir=args.val_fonts_dir)
+                  length=ko_n * 60, seed=args.val_seed,
+                  fonts_dir=(args.val_fonts_dir or val_fonts))
         got, ko_skip = _draw_safe(kds, ko_n); samples += got
     if en_n > 0:
         eds = _mken(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
@@ -288,6 +299,9 @@ def train(args):
         state = ckpt["model"] if "model" in ckpt else ckpt
         if any(k.startswith("module.") for k in state):
             state = {k[len("module."):]: v for k, v in state.items()}
+        if args.reset_vae:
+            n0 = len(state); state = {k: v for k, v in state.items() if not k.startswith("vae.")}
+            print(f"  [reset-vae] pretrained vae.* {n0-len(state)}키 strip → --vae-checkpoint 유지")
         missing, unexpected = model.load_state_dict(state, strict=False)
         print(f"  missing={len(missing)}, unexpected={len(unexpected)}")
         if missing[:3]:
@@ -310,6 +324,9 @@ def train(args):
         rstate = rck["model"] if "model" in rck else rck
         if any(k.startswith("module.") for k in rstate):
             rstate = {k[len("module."):]: v for k, v in rstate.items()}
+        if args.reset_vae:
+            n0 = len(rstate); rstate = {k: v for k, v in rstate.items() if not k.startswith("vae.")}
+            print(f"  [reset-vae] resume vae.* {n0-len(rstate)}키 strip → --vae-checkpoint({args.vae_checkpoint}) 유지")
         m, u = model.load_state_dict(rstate, strict=False)
         print(f"  model missing={len(m)} unexpected={len(u)}")
         if "optimizer" in rck:
@@ -334,8 +351,17 @@ def train(args):
         print(f"  resume step={start_step} (→ max-steps {args.max_steps})")
 
     # ── dataset (max_steps 확정 후 생성: length 가 정확) ──
+    train_fonts = val_fonts = None   # None = 폰트 분할 없음(전체 학습 폰트)
     if args.online_split:
         from korean_split_dataset import make_dataset, split_collate, dump_samples
+        # 폰트 단위 train/val 분할: val 폰트는 학습에서 제외 → val 이 '본 적 없는 폰트'가 됨.
+        # (--val-fonts-dir 지정 시엔 그 디렉토리가 val, 학습은 전체 폰트 사용)
+        if not args.val_fonts_dir and args.val_font_frac > 0:
+            from korean_split_dataset import split_train_fonts
+            train_fonts, val_fonts = split_train_fonts(args.val_font_frac, seed=args.val_seed)
+            print(f"폰트 분할: train {len(train_fonts)} / val {len(val_fonts)} "
+                  f"(val-font-frac={args.val_font_frac}, seed={args.val_seed}) "
+                  f"| val 폰트: {', '.join(p.stem for p in val_fonts)}")
         # 온라인 무한 생성 = 매 샘플이 새로 렌더됨 (중복 0, 사실상 무한 데이터셋).
         # resume 시 같은 seed 면 처음 본 샘플을 다시 보게 되므로 ckpt 파일명의
         # step 을 seed offset 으로 사용해 항상 새 샘플을 보장.
@@ -350,7 +376,8 @@ def train(args):
             en_len = int(total_len * args.english_frac)
             ko_len = total_len - en_len
             ko_ds = make_dataset(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
-                                 length=ko_len, seed=args.seed + seed_off, legacy=args.legacy_transform)
+                                 length=ko_len, seed=args.seed + seed_off, legacy=args.legacy_transform,
+                                 fonts_dir=train_fonts)
             en_ds = make_english_dataset(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
                                          length=en_len, seed=args.seed + seed_off + 777,
                                          fonts_dir=args.english_fonts_dir)
@@ -365,7 +392,8 @@ def train(args):
         else:
             dataset = make_dataset(style_range=tuple(args.style_words),
                                    gen_range=tuple(args.gen_words),
-                                   length=total_len, seed=args.seed + seed_off, legacy=args.legacy_transform)
+                                   length=total_len, seed=args.seed + seed_off, legacy=args.legacy_transform,
+                                   fonts_dir=train_fonts)
             if args.save_samples > 0:
                 dump_samples(dataset, args.save_samples, out_dir / "train_samples",
                              model=model, max_img_len=args.max_img_len)
@@ -413,13 +441,13 @@ def train(args):
             trunc_f.write(f"{step},{kind},{have},{budget},{style_lens[i]},{gen_lens[i]},"
                           f"{esc(st)},{esc(gt)},{ts}\n")
 
-    # ── validation 세트(고정): held-out 폰트에서 렌더 후 디스크에 저장 → run 간 재사용 ──
-    #    한글(unseen 폰트) + 영어(english_frac 비율, 학습과 동일). 매 run 새로 뽑던 문제 제거.
+    # ── validation 세트(고정): 렌더 후 디스크에 저장 → run 간 재사용 ──
+    #    한글(기본: train 에서 분할한 val 폰트 = 학습 미노출) + 영어(english_frac 비율, 학습과 동일).
     val_batches = None
     val_f = None
     if args.online_split and args.val_every > 0:
         from korean_split_dataset import dump_samples
-        val_samples, n_val = _load_or_build_val_samples(args, out_dir)
+        val_samples, n_val = _load_or_build_val_samples(args, out_dir, val_fonts=val_fonts)
         # 부분배치(bs 미만)는 forward shape 버그 회피 위해 제외
         val_batches = [collate(val_samples[i:i + args.batch_size])
                        for i in range(0, len(val_samples), args.batch_size)]
@@ -433,9 +461,15 @@ def train(args):
         if val_f.tell() == 0:
             val_f.write("step,val_loss,val_mse,val_ce,timestamp\n")
         en_n = int(round(n_val * args.english_frac)) if args.english_frac > 0 else 0
+        if args.val_fonts_dir:
+            ko_fonts_desc = Path(args.val_fonts_dir).name
+        elif val_fonts:
+            ko_fonts_desc = f"train 에서 분할한 {len(val_fonts)}종(학습 제외)"
+        else:
+            ko_fonts_desc = "train 전체(텍스트만 분리)"
         print(f"val: {len(val_batches)} batches × bs {args.batch_size} "
-              f"(한글 {n_val - en_n} + 영어 {en_n}, held-out KO 폰트: "
-              f"{Path(args.val_fonts_dir).name}) → {val_csv}, 시각화 → {out_dir/'val_samples'}")
+              f"(한글 {n_val - en_n} + 영어 {en_n}, KO 폰트: "
+              f"{ko_fonts_desc}) → {val_csv}, 시각화 → {out_dir/'val_samples'}")
 
     def _run_val(step):
         if val_batches is None:

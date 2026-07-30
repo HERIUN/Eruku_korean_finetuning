@@ -98,15 +98,24 @@ def gen_arr(model, dec, ref_text, seed_text, cfg, max_new, style_px, device):
         ((g[0] + 1) / 2).clamp(0, 1).cpu()).convert("L"))
 
 
-def load_model(ckpt, device):
-    """Emuru 모델 로드 + 체크포인트 적용. (infer_show/infer_matrix 공용)"""
-    model = Emuru(t5_checkpoint="google-t5/t5-large",
-                  vae_checkpoint="blowing-up-groundhogs/emuru_vae").to(device)
+def load_model(ckpt, device, vae_checkpoint=None):
+    """Emuru 모델 로드 + 체크포인트 적용. (infer_show/infer_matrix 공용)
+
+    vae_checkpoint 를 주면 그 VAE 로 모델을 만들고, **ckpt 의 옛 vae.\\* 키를 strip** 해서
+    새 VAE 가 덮이지 않게 한다(한글 적응 VAE 교체 검증용; ckpt.model 에 옛 vae.* 252키가 있음).
+    안 주면 기존 동작(default emuru_vae, ckpt 의 vae.* 그대로 로드).
+    """
+    vae_ck = vae_checkpoint or "blowing-up-groundhogs/emuru_vae"
+    model = Emuru(t5_checkpoint="google-t5/t5-large", vae_checkpoint=vae_ck).to(device)
     model.alpha = 1.0
     ck = torch.load(ckpt, map_location="cpu", weights_only=False)
     st = ck["model"] if "model" in ck else ck
     if any(k.startswith("module.") for k in st):
         st = {k[len("module."):]: v for k, v in st.items()}
+    if vae_checkpoint:  # 새 VAE 유지: ckpt 의 옛 vae.* 제거
+        n_before = len(st)
+        st = {k: v for k, v in st.items() if not k.startswith("vae.")}
+        print(f"[load_model] vae swapped -> {vae_ck} (ckpt vae.* {n_before - len(st)}키 strip)")
     model.load_state_dict(st, strict=False)
     model.drop_text = True
     step = ck.get("step", "?"); del ck, st
@@ -117,6 +126,8 @@ def load_model(ckpt, device):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
+    ap.add_argument("--vae-checkpoint", default=None,
+                    help="한글 적응 VAE(vae_sXXXX) 로 교체해 생성. 주면 ckpt 의 옛 vae.* 를 strip")
     ap.add_argument("--lines-json", default=str(HERE / "data" / "korean_fontset_v2" / "train_lines.json"))
     ap.add_argument("--out", default=str(HERE / "finetune_runs" / "korean_v2" / "show.png"))
     ap.add_argument("--seed-text", default="한국어 OCR 2024")
@@ -158,7 +169,7 @@ def main():
     device = torch.device(args.device)
     CW, CH = args.cell_w, args.cell_h
 
-    model, step = load_model(args.ckpt, device)
+    model, step = load_model(args.ckpt, device, vae_checkpoint=args.vae_checkpoint)
 
     rows = json.loads(Path(args.lines_json).read_text(encoding="utf-8"))
     by_w = {}

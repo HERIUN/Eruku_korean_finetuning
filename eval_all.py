@@ -51,7 +51,7 @@ def main():
     ap.add_argument("--coherent", action="store_true", help="실제 문장 세그먼트로 평가(신뢰성↑)")
     ap.add_argument("--max-words", type=int, default=15, help="문장 최대 어절수(올리면 긴 문장 테스트)")
     ap.add_argument("--fonts-dir-ko", default=str(HERE / "assets/fonts_korean_v2/train"),
-                    help="한글 style 폰트 디렉토리(일반화 보려면 fonts_korean_unseen)")
+                    help="한글 style 폰트 디렉토리(일반화 보려면 fonts_korean_v2/test)")
     ap.add_argument("--fonts-dir-en", default=str(HERE / "assets/fonts_english"),
                     help="영어 style 폰트 디렉토리")
     args = ap.parse_args()

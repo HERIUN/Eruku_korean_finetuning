@@ -44,6 +44,8 @@ def cer(hyp, ref):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
+    ap.add_argument("--vae-checkpoint", default=None,
+                    help="한글 적응 VAE(vae_sXXXX) 로 교체 평가. 주면 ckpt 의 옛 vae.* 를 strip")
     ap.add_argument("--fonts-dir", default=str(HERE / "assets/fonts_korean_v2/train"))
     ap.add_argument("--n", type=int, default=100)
     ap.add_argument("--cfg", type=float, default=1.0)
@@ -68,7 +70,9 @@ def main():
     def _hook(m, i, o):
         t = o[0] if isinstance(o, (tuple, list)) else o
         _feat['v'] = t.detach().float().reshape(-1, t.shape[-1]).mean(0)   # [C]
-    reader.recognizer.SequenceModeling.register_forward_hook(_hook)
+    # --ocr-gpu 면 recognizer 가 DataParallel 로 감싸져 .module 아래에 있음
+    _rec = reader.recognizer.module if hasattr(reader.recognizer, "module") else reader.recognizer
+    _rec.SequenceModeling.register_forward_hook(_hook)
 
     def ocr(arr):
         # arr: grayscale uint8 [H,W] → 텍스트 + OCR feature([C])
@@ -76,7 +80,7 @@ def main():
         res = reader.readtext(np.stack([arr] * 3, -1), detail=0, paragraph=True)
         return (" ".join(res) if res else ""), _feat.get('v')
 
-    model, step = load_model(args.ckpt, device)
+    model, step = load_model(args.ckpt, device, vae_checkpoint=args.vae_checkpoint)
     fonts = sorted(p for p in Path(args.fonts_dir).glob("*.ttf"))
     texts = build_texts(args.n, rng, english=args.english, coherent=args.coherent, max_words=args.max_words)
 
