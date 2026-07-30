@@ -235,43 +235,64 @@ on its own, while a Korean HTR loss biases the shared decoder and degrades Engli
 
 ## Usage
 
-Roundtrip a text-line image through the VAE (encode -> decode). Input conventions are
-inherited from `emuru_vae`: **height 64**, values in **[-1, 1]** (background +1, ink -1),
-**3 input channels** (feed the grayscale line repeated 3x) and **1 output channel**. Width must
-be a multiple of 8 — one latent column covers 8 pixels and carries 8 dims, which is exactly
-what Eruku conditions on and predicts.
+Copy these two helpers and you never have to think about the input conventions again
+(they are inherited from `emuru_vae`, not chosen by us):
 
 ```python
 from diffusers import AutoencoderKL
 from PIL import Image
 import numpy as np, torch, torch.nn.functional as F
 
-vae = AutoencoderKL.from_pretrained("{VAE_REPO}").eval().cuda()
+def to_vae_input(image, height=64):
+    # PIL text-line image -> [1, 3, height, W] in [-1, 1], width padded to a multiple of 8
+    g = image.convert("L")
+    w = max(1, round(height * g.width / g.height))
+    x = torch.from_numpy(np.array(g, dtype=np.float32) / 255.0)[None, None]
+    x = F.interpolate(x, size=(height, w), mode="bilinear", align_corners=False).clamp(0, 1)
+    x = F.pad(x * 2 - 1, (0, -w % 8), value=1.0)     # [-1,1], white pad
+    return x.repeat(1, 3, 1, 1)                       # encoder wants 3 channels
 
-# 1. one text line -> [1, 1, 64, W] in [-1, 1]
-img = Image.open("line.png").convert("L")            # a single line of text
-w = max(1, round(64 * img.width / img.height))
-x = torch.from_numpy(np.array(img, dtype=np.float32) / 255.0)[None, None]
-x = F.interpolate(x, size=(64, w), mode="bilinear", align_corners=False).clamp(0, 1) * 2 - 1
-x = F.pad(x, (0, -w % 8), value=1.0)                 # pad to a multiple of 8 with white
-
-# 2. encode -> latent [1, 1, 8, W/8] -> decode
-with torch.no_grad():
-    z = vae.encode(x.repeat(1, 3, 1, 1).cuda()).latent_dist.mode()   # .sample() to draw noise
-    rec = vae.decode(z).sample.clamp(-1, 1)[:, :1].cpu()
-
-# 3. back to an image
-Image.fromarray((((rec[0, 0] + 1) / 2) * 255).byte().numpy()).save("line_recon.png")
-print(tuple(x.shape), "->", tuple(z.shape), "->", tuple(rec.shape))
-# (1, 1, 64, 872) -> (1, 1, 8, 109) -> (1, 1, 64, 872)
+def to_pil(t):
+    # VAE output [1, 1, H, W] in [-1, 1] -> grayscale PIL image
+    return Image.fromarray((((t[0, 0].clamp(-1, 1) + 1) / 2) * 255).byte().cpu().numpy())
 ```
 
-To generate handwriting rather than reconstruct it, use the paired model
-[`{MODEL_REPO}`](https://huggingface.co/{MODEL_REPO}) — it loads this VAE automatically.
+Then a roundtrip is three lines:
 
-The numbers above are measured on clean font renders. Real scanned handwriting reconstructs
-noticeably worse (roundtrip MSE ~0.016 on our 20-line scan probe): the decoder snaps ink to
-crisp black and does not preserve faint or pencil strokes.
+```python
+vae = AutoencoderKL.from_pretrained("{VAE_REPO}").eval().cuda()
+x = to_vae_input(Image.open("line.png"))
+
+with torch.no_grad():
+    z = vae.encode(x.cuda()).latent_dist.mode()      # [1, 1, 8, W/8]  (.sample() adds noise)
+    rec = vae.decode(z).sample[:, :1]                # decoder returns 1 channel
+
+to_pil(rec).save("line_recon.png")
+print(tuple(x.shape), "->", tuple(z.shape), "->", tuple(rec.shape))
+# (1, 3, 64, 872) -> (1, 1, 8, 109) -> (1, 1, 64, 872)
+```
+
+One latent column covers 8 pixels and carries 8 dims — that column sequence is exactly what
+Eruku conditions on and predicts.
+
+### Which of those conventions actually matter
+
+Measured by breaking one at a time on the same input line:
+
+| convention | what happens if you ignore it |
+|---|---|
+| 3 input channels | **hard error** (`expected input[1, 1, 64, 872] to have 3 channels`) |
+| values in [-1, 1] | runs and looks plausible, but the latents are wrong — output shifts by MSE 0.010 and Eruku conditioning degrades silently. The easiest mistake to make |
+| height 64 | runs, but the latent height follows the input (96px -> 12 rows), so it no longer matches Eruku's 8-dim-per-column interface |
+| width a multiple of 8 | runs; the output is silently up to 7px narrower than the input (871 -> 864) |
+
+To generate handwriting rather than reconstruct it, use the paired model
+[`{MODEL_REPO}`](https://huggingface.co/{MODEL_REPO}) — it loads this VAE automatically and
+does the preprocessing for you.
+
+The metrics above the figures are measured on clean font renders. Real scanned handwriting
+reconstructs noticeably worse (roundtrip MSE ~0.016 on our 20-line scan probe): the decoder
+snaps ink to crisp black and does not preserve faint or pencil strokes.
 
 > **Warning — latent space moved.** This was trained with `--train-part full`
 > (encoder + decoder), so its latents are **not interchangeable** with the original
