@@ -235,8 +235,9 @@ on its own, while a Korean HTR loss biases the shared decoder and degrades Engli
 
 ## Usage
 
-Copy these two helpers and you never have to think about the input conventions again
-(they are inherited from `emuru_vae`, not chosen by us):
+Only two things are actually load-bearing: the encoder wants **3 channels**, and pixel values
+must be roughly **unit-scale**. Everything else below is convention. Copy these two helpers and
+you can forget all of it:
 
 ```python
 from diffusers import AutoencoderKL
@@ -277,14 +278,14 @@ Eruku conditions on and predicts.
 
 ### Which of those conventions actually matter
 
-Measured by breaking one at a time on the same input line:
+Measured by breaking one at a time (roundtrip MSE against the same input, one clean font line):
 
-| convention | what happens if you ignore it |
+| convention | reality |
 |---|---|
-| 3 input channels | **hard error** (`expected input[1, 1, 64, 872] to have 3 channels`) |
-| values in [-1, 1] | runs and looks plausible, but the latents are wrong — output shifts by MSE 0.010 and Eruku conditioning degrades silently. The easiest mistake to make |
-| height 64 | runs, but the latent height follows the input (96px -> 12 rows), so it no longer matches Eruku's 8-dim-per-column interface |
-| width a multiple of 8 | runs; the output is silently up to 7px narrower than the input (871 -> 864) |
+| 3 input channels | **required.** Anything else is a hard error (`expected input[1, 1, 64, 872] to have 3 channels`). Repeat your grayscale line 3x |
+| values in [-1, 1] | **barely matters.** Feeding [0, 1] instead gives latents with cosine 0.9997 to the convention and identical reconstruction (MSE 0.0045 vs 0.0046) — a GroupNorm right after the first conv absorbs a global shift/scale. But stay near unit scale: raw 0-255 input does break it (cosine 0.55, latent std 1.04 -> 0.53) |
+| height 64 | **required only for Eruku.** Latent rows = height / 8, and Eruku's interface expects 8. Standalone the VAE takes any height: 96 costs a little (MSE 0.0072 vs 0.0046), but 32 is much worse (0.127) — never go below 64 |
+| width a multiple of 8 | **cosmetic.** Fidelity is unchanged; the output is just up to 7px narrower than the input (871 -> 864), since the encoder floors the width to a latent column |
 
 To generate handwriting rather than reconstruct it, use the paired model
 [`{MODEL_REPO}`](https://huggingface.co/{MODEL_REPO}) — it loads this VAE automatically and
