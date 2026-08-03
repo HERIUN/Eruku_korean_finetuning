@@ -19,8 +19,7 @@ from PIL import Image
 from diffusers import AutoencoderKL
 from skimage.metrics import structural_similarity as ssim
 
-HERE = Path(__file__).resolve().parent
-import sys; sys.path.insert(0, str(HERE))
+from _common import TRAIN_FONTS, HW_DIR
 from infer_show import render_in_font
 
 TEXTS = ["형형색색 꽃들이 활짝 피어난 봄날의 공원", "2024년 10월 15일 서울특별시 강남구",
@@ -63,10 +62,10 @@ def main():
     dev = torch.device(args.device)
     vae = AutoencoderKL.from_pretrained(args.vae).eval().to(dev)
 
-    fonts = sorted((HERE / "assets/fonts_korean_v2/train").glob("*.ttf"))[:3]
+    fonts = sorted(TRAIN_FONTS.glob("*.ttf"))[:3]
     groups = [(f"폰트 렌더 {len(TEXTS)*len(fonts)}장",
                [Image.fromarray(render_in_font(f, t, size=args.render_size)) for t in TEXTS for f in fonts])]
-    scans = [Image.open(p) for p in sorted((HERE / "custom_datasets/hw_line_sample").glob("line_*.png"))[:10]]
+    scans = [Image.open(p) for p in sorted(HW_DIR.glob("line_*.png"))[:10]]
     if scans:
         groups.append((f"실제 스캔 {len(scans)}장", scans))
 

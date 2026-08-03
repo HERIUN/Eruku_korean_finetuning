@@ -14,18 +14,12 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import numpy as np, torch
-import torch.nn.functional as F
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw
 from diffusers import AutoencoderKL
-from skimage.metrics import structural_similarity as ssim
 
-HERE = Path(__file__).resolve().parent
-import sys; sys.path.insert(0, str(HERE))
+from _common import (REPO, TRAIN_FONTS as TRAIN, TEST_FONTS as UNSEEN, load_line_x11,
+                     roundtrip, metrics, to_u8, label_fonts, strip_row, pad_blocks, vae_summary)
 from infer_show import render_in_font
-
-TRAIN = HERE / "assets/fonts_korean_v2/train"
-UNSEEN = HERE / "assets/fonts_korean_v2/test"
-LABEL_FONT = HERE / "assets/fonts_label/NanumGothic-Regular.ttf"
 
 # (폰트, 텍스트): 단문→장문 + 밀집/난해 음절(기존 VAE 가 잘 뭉개던 류) 포함. 마지막 2개는 held-out 폰트로 일반화 확인.
 SAMPLES = [
@@ -63,40 +57,12 @@ def load_vae(src, dev):
     return AutoencoderKL.from_pretrained(src).to(dev).eval()
 
 
-def render64(font, text):
-    """text → clean bw [1,64,w] [-1,1] (bg=+1, ink=-1)."""
-    arr = render_in_font(font, text)                       # [H,W] uint8 ink~0 bg~255
-    t = torch.from_numpy(arr.astype(np.float32) / 255.0)[None, None]
-    w64 = max(1, int(round(H * arr.shape[1] / arr.shape[0])))
-    t = F.interpolate(t, size=(H, w64), mode="bilinear", align_corners=False).clamp(0, 1)
-    x = t * 2 - 1                                          # [1,1,64,w] [-1,1]
-    w8 = (w64 + 7) // 8 * 8                                # VAE 는 폭이 8배수여야 정확 roundtrip → 흰색(+1) 우측패딩
-    if w8 != w64:
-        x = F.pad(x, (0, w8 - w64), value=1.0)
-    return x
-
-
-@torch.no_grad()
-def roundtrip(vae, x, dev):
-    z = vae.encode(x.repeat(1, 3, 1, 1).to(dev)).latent_dist.mode()
-    return vae.decode(z).sample.clamp(-1, 1)[:, :1].cpu()  # [1,1,64,w]
-
-
-def metrics(orig, rec):
-    a = ((orig[0, 0] + 1) / 2).numpy(); b = ((rec[0, 0] + 1) / 2).numpy()
-    return float(np.mean((a - b) ** 2)), float(ssim(a, b, data_range=1.0))
-
-
-def to_u8(t):
-    return ((t[0, 0] + 1) / 2 * 255).clamp(0, 255).byte().numpy()
-
-
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--models", nargs="+", required=True,
                     help='"라벨=경로" 목록. 각 텍스트마다 원본 아래로 이 순서대로 복원 stack. '
                          '예: 원본=blowing-up-groundhogs/emuru_vae decoder=.../vae_dec/vae_s15000 full=.../vae_full/vae_s15000')
-    ap.add_argument("--out", default=str(HERE / "finetune_runs/korean_en2ko_fixed/_eval/recon_ko.png"))
+    ap.add_argument("--out", default=str(REPO / "finetune_runs/korean_en2ko_fixed/_eval/recon_ko.png"))
     ap.add_argument("--lang", choices=["ko", "en", "hard"], default="ko", help="ko=한글 / en=영어 / hard=극단폰트")
     ap.add_argument("--label-lang", choices=["ko", "en"], default="ko",
                     help="figure 안 고정 라벨/제목 언어. en = 공개(HF 모델카드) 용")
@@ -107,8 +73,7 @@ def main():
 
     specs = [m.split("=", 1) for m in args.models]        # [(label, path), ...]
     vaes = [(lbl, load_vae(path, dev)) for lbl, path in specs]
-    lab = ImageFont.truetype(str(LABEL_FONT), 15) if LABEL_FONT.exists() else ImageFont.load_default()
-    hdrf = ImageFont.truetype(str(LABEL_FONT), 17) if LABEL_FONT.exists() else ImageFont.load_default()
+    lab, hdrf = label_fonts()
 
     LW = 110                                               # 좌측 라벨 폭
     blocks = []
@@ -116,29 +81,22 @@ def main():
     for font, text in samples:
         if not Path(font).exists():
             print(f"[skip] font 없음 {font}"); continue
-        x = render64(font, text)
+        x = load_line_x11(render_in_font(font, text), h=H)
         w = x.shape[-1]
-        def strip(t_u8, name, extra=""):
-            row = np.full((H, LW + w), 255, np.uint8)
-            row[:, LW:LW + t_u8.shape[1]] = t_u8
-            im = Image.fromarray(row)
-            d = ImageDraw.Draw(im); d.text((6, 4), name, font=lab, fill=0)
-            if extra: d.text((6, H - 22), extra, font=lab, fill=0)
-            return np.array(im)
         head = Image.new("L", (LW + w, 24), 235)
         ImageDraw.Draw(head).text((6, 3), f"[{Path(font).stem}] {text}", font=hdrf, fill=0)
-        parts = [np.array(head), strip(to_u8(x), "원본" if args.label_lang == "ko" else "source")]
+        parts = [np.array(head),
+                 strip_row(to_u8(x), "원본" if args.label_lang == "ko" else "source", w, LW, H, lab)]
         for lbl, vae in vaes:
             r = roundtrip(vae, x, dev)
             m, s = metrics(x, r)
             agg[lbl]["m"].append(m); agg[lbl]["s"].append(s)
-            parts += [np.full((2, LW + w), 210, np.uint8), strip(to_u8(r), lbl, f"MSE {m:.4f} SSIM {s:.3f}")]
+            parts += [np.full((2, LW + w), 210, np.uint8),
+                      strip_row(to_u8(r), lbl, w, LW, H, lab, f"MSE {m:.4f} SSIM {s:.3f}")]
         parts.append(np.full((8, LW + w), 90, np.uint8))
         blocks.append(np.vstack(parts))
 
-    Wm = max(b.shape[1] for b in blocks)
-    blocks = [np.hstack([b, np.full((b.shape[0], Wm - b.shape[1]), 255, np.uint8)]) if b.shape[1] < Wm else b
-              for b in blocks]
+    Wm, blocks = pad_blocks(blocks)
     # 요약 헤더: 모델별 평균 MSE/SSIM + 첫 모델(보통 원본) 대비 증감
     if args.label_lang == "ko":
         _langname = {"en": "영어", "hard": "극단폰트"}.get(args.lang, "한글")
@@ -146,15 +104,7 @@ def main():
     else:
         _langname = {"en": "English", "hard": "extreme fonts"}.get(args.lang, "Korean")
         _title = f"{_langname} VAE reconstruction (roundtrip encode->decode, MSE lower / SSIM higher)   mean  "
-    base = float(np.mean(agg[vaes[0][0]]["m"]))
-    seg = []
-    for lbl, _ in vaes:
-        mm = float(np.mean(agg[lbl]["m"])); ss = float(np.mean(agg[lbl]["s"]))
-        if lbl == vaes[0][0]:
-            seg.append(f"{lbl} {mm:.4f}/{ss:.3f}")
-        else:
-            d = (mm / base - 1) * 100
-            seg.append(f"{lbl} {mm:.4f}/{ss:.3f}({'+' if d > 0 else ''}{d:.0f}%)")
+    seg = vae_summary(agg, [lbl for lbl, _ in vaes])
     summ = Image.new("L", (Wm, 30), 255)
     ImageDraw.Draw(summ).text((6, 6), _title + "  |  ".join(seg), font=hdrf, fill=0)
     out = np.vstack([np.array(summ), np.full((3, Wm), 0, np.uint8)] + blocks)

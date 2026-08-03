@@ -25,7 +25,7 @@ from fontTools.ttLib import TTFont
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from infer_show import load_model, gen_arr, render_in_font
+from infer_show import load_model, render_in_font, style_tensor, gen_from_style
 
 
 def h64(a, h=64):
@@ -36,13 +36,6 @@ def h64(a, h=64):
 def pad_to(a, W, val=255):
     h, w = a.shape
     return a[:, :W] if w >= W else np.hstack([a, np.full((h, W - w), val, np.uint8)])
-
-
-def style_tensor(arr, h=64):
-    img = Image.fromarray(arr).convert("RGB")
-    w, hh = img.size
-    img = img.resize((max(1, int(w * (h / hh))), h), Image.BILINEAR)
-    return T.Compose([T.ToTensor(), T.Normalize((0.5,) * 3, (0.5,) * 3)])(img)
 
 
 # 코헤런트 영어 코퍼스(실제 문장) — 세그먼트 추출용
@@ -147,12 +140,10 @@ def main():
         if fp is None:
             continue
         gt = render_in_font(fp, text)                          # 정답(깨끗 렌더)
-        st = style_tensor(gt).unsqueeze(0).to(device)
-        mi = model.get_model_inputs([st[0]], None, style_len=st.shape[-1], gen_len=None, max_img_len=2048)
-        dec = mi["decoder_inputs_embeds"].to(device); spx = dec.shape[1] * 8
         stext = "" if args.no_style_text else text
         try:
-            gen = gen_arr(model, dec, stext, text, args.cfg, args.max_new_tokens, spx, device)
+            gen = gen_from_style(model, style_tensor(gt), stext, text,
+                                 args.cfg, args.max_new_tokens, device)
         except Exception as e:
             print(f"  [skip] {text[:20]!r}: {e}"); continue
         # 정렬: height 64, 공통 폭 패딩

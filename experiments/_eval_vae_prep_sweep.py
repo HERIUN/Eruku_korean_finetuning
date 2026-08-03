@@ -6,8 +6,7 @@
   CER(input)     = 같은 리더가 입력 이미지를 읽은 CER (= 바닥)
   damage         = CER(recon) - CER(input)  ← VAE 통과로 잃은 가독성만 분리
 """
-import sys
-from pathlib import Path
+import argparse
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -15,36 +14,28 @@ from PIL import Image, ImageOps
 from diffusers import AutoencoderKL
 from skimage.metrics import structural_similarity as ssim
 
-REPO = Path("/data/work/dgkang/Eruku_korean_finetuning")
-sys.path.insert(0, str(REPO))
+from _common import HTR_CKPT, TRAIN_FONTS, read_hw_labels, read_cer
 from infer_show import render_in_font
-from eval_htr_cer import to_htr_input, htr_read, norm
-from train_aux_htr import load_pretrained_htr, cer as char_cer
-
-dev = torch.device("cuda")
-vae = AutoencoderKL.from_pretrained("HERIUN/emuru_vae_korean").eval().to(dev)
-htr = load_pretrained_htr(REPO / "finetune_runs/aux_htr_ko/htr_s20000").to(dev).eval()
+from train_aux_htr import load_pretrained_htr
 
 # ── 샘플: 깨끗한 폰트 렌더 + 실제 스캔 ────────────────────────────────────────
 FONTS = ["NanumGothic", "GowunDodum", "Pretendard-Regular"]
 TEXTS = ["형형색색 꽃들이 활짝 피어난 봄날의 공원",
          "2024년 10월 15일 서울특별시 강남구 역삼동",
          "인공지능 모델의 한국어 생성 성능 평가"]
-samples = []
-for i, t in enumerate(TEXTS):
-    for f in FONTS[:2]:
-        fp = REPO / f"assets/fonts_korean_v2/train/{f}.ttf"
-        if fp.exists():
-            samples.append(("font", Image.fromarray(render_in_font(fp, t)), t))
-lab = {}
-for ln in (REPO / "custom_datasets/hw_line_sample/label.txt").read_text(encoding="utf-8").splitlines():
-    if "\t" in ln:
-        k, v = ln.rstrip("\n").split("\t", 1)
-        lab[k] = v
-for p in sorted((REPO / "custom_datasets/hw_line_sample").glob("line_*.png"))[:6]:
-    samples.append(("scan", Image.open(p), lab[p.name]))
-print(f"samples: {sum(1 for s in samples if s[0]=='font')} font + "
-      f"{sum(1 for s in samples if s[0]=='scan')} scan")
+
+
+def build_samples(n_scan):
+    samples = []
+    for t in TEXTS:
+        for f in FONTS[:2]:
+            fp = TRAIN_FONTS / f"{f}.ttf"
+            if fp.exists():
+                samples.append(("font", Image.fromarray(render_in_font(fp, t)), t))
+    for p, txt in read_hw_labels()[:n_scan]:
+        samples.append(("scan", Image.open(p), txt))
+    return samples
+
 
 RESAMPLE = {"lanczos": Image.LANCZOS, "bicubic": Image.BICUBIC, "bilinear": Image.BILINEAR}
 
@@ -93,7 +84,7 @@ def prep(img, height=64, interp="bilinear", contrast=None, pad8=True, invert=Fal
 
 
 @torch.no_grad()
-def evaluate(name, **kw):
+def evaluate(name, samples, vae, htr, dev, **kw):
     ms, ss, cr, ci = [], [], [], []
     err = None
     for kind, img, text in samples:
@@ -111,8 +102,8 @@ def evaluate(name, **kw):
         rec_u8 = (b * 255).astype(np.uint8); in_u8 = (a * 255).astype(np.uint8)
         if kw.get("invert"):                       # 리더는 어두운 잉크/밝은 배경을 기대
             rec_u8 = 255 - rec_u8; in_u8 = 255 - in_u8
-        cr.append(char_cer([norm(htr_read(htr, to_htr_input(rec_u8, dev), dev)[0])], [norm(text)]))
-        ci.append(char_cer([norm(htr_read(htr, to_htr_input(in_u8, dev), dev)[0])], [norm(text)]))
+        cr.append(read_cer(htr, rec_u8, text, dev))
+        ci.append(read_cer(htr, in_u8, text, dev))
     if err:
         print(f"{name:38s} FAIL  {err}")
         return None
@@ -137,7 +128,29 @@ VARIANTS = [
     ("height 96",                            dict(height=96)),
     ("반전 입력(흰글씨/검은배경)",                dict(invert=True)),
 ]
-rows = [r for r in (evaluate(n, **kw) for n, kw in VARIANTS) if r]
-print("\n=== 손상(damage) 낮은 순 ===")
-for r in sorted(rows, key=lambda r: (round(r["damage"], 3), r["mse"])):
-    print(f"  {r['name']:38s} damage={r['damage']:+.3f}  CER={r['cer']:.3f}  MSE={r['mse']:.4f}  SSIM={r['ssim']:.3f}")
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--vae", default="HERIUN/emuru_vae_korean", help="평가할 VAE(경로 또는 hub id)")
+    ap.add_argument("--n-scan", type=int, default=6, help="실제 손글씨 스캔 표본 수")
+    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    args = ap.parse_args()
+
+    dev = torch.device(args.device)
+    vae = AutoencoderKL.from_pretrained(args.vae).eval().to(dev)
+    htr = load_pretrained_htr(HTR_CKPT).to(dev).eval()
+    samples = build_samples(args.n_scan)
+    print(f"samples: {sum(1 for s in samples if s[0]=='font')} font + "
+          f"{sum(1 for s in samples if s[0]=='scan')} scan")
+
+    rows = [r for r in (evaluate(n, samples, vae, htr, dev, **kw) for n, kw in VARIANTS) if r]
+    print("\n=== 손상(damage) 낮은 순 ===")
+    for r in sorted(rows, key=lambda r: (round(r["damage"], 3), r["mse"])):
+        print(f"  {r['name']:38s} damage={r['damage']:+.3f}  CER={r['cer']:.3f}  "
+              f"MSE={r['mse']:.4f}  SSIM={r['ssim']:.3f}")
+
+
+if __name__ == "__main__":
+    main()

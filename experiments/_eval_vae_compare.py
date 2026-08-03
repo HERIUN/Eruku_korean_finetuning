@@ -17,9 +17,9 @@ from pathlib import Path
 import numpy as np, torch
 from PIL import Image
 
-HERE = Path(__file__).resolve().parent
-import sys; sys.path.insert(0, str(HERE))
-from infer_show import (load_model, load_style, render_in_font, gen_arr, cell, label_img, FONTS_DIR)
+from _common import REPO, header_row, fit_row
+from infer_show import (load_model, load_style, render_in_font, gen_from_style,
+                        cell, label_img, FONTS_DIR)
 
 CATS = {
     "ko_short": ["한국어 평가", "형형색색 꽃", "인공지능 모델", "새벽 공기"],
@@ -39,8 +39,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--ckpt", required=True)
     ap.add_argument("--vae-checkpoint", required=True, help="한글적응 new VAE(vae_sXXXX)")
-    ap.add_argument("--lines-json", default=str(HERE / "data" / "korean_fontset_v2" / "train_lines.json"))
-    ap.add_argument("--out-dir", default=str(HERE / "finetune_runs" / "korean_en2ko_fixed" / "_eval"))
+    ap.add_argument("--lines-json", default=str(REPO / "data" / "korean_fontset_v2" / "train_lines.json"))
+    ap.add_argument("--out-dir", default=str(REPO / "finetune_runs" / "korean_en2ko_fixed" / "_eval"))
     ap.add_argument("--n-writers", type=int, default=4, help="행(스타일) 수 = 카테고리 텍스트 수만큼")
     ap.add_argument("--cfg", type=float, default=1.5)
     ap.add_argument("--max-new-tokens", type=int, default=320)
@@ -74,21 +74,16 @@ def main():
                   f"NEW VAE 생성 (cfg={args.cfg})"]
     ncol = len(col_labels); full_w = ncol * (CW + 4)
 
-    @torch.no_grad()
     def gen(model, ref, target):
-        style_img = load_style(Path(ref["image_path"])).unsqueeze(0).to(device)
-        mi = model.get_model_inputs([style_img[0]], None, style_len=style_img.shape[-1],
-                                    gen_len=None, max_img_len=2048)
-        dec = mi["decoder_inputs_embeds"].to(device); spx = dec.shape[1] * 8
-        torch.manual_seed(args.seed)                                  # old/new 동일 조건
-        return gen_arr(model, dec, ref["text"], target, args.cfg, args.max_new_tokens, spx, device)
+        return gen_from_style(model, load_style(Path(ref["image_path"])), ref["text"], target,
+                              args.cfg, args.max_new_tokens, device,
+                              seed=args.seed)                         # old/new 동일 조건
 
     cats = {k: v for k, v in CATS.items() if not args.cats or k in args.cats}
     for cat, texts in cats.items():
         print(f"[{cat}]")
         grid = []
-        # 헤더
-        hdr = np.hstack([cell(np.full((CH, CW), 245, np.uint8), lbl, CW, CH) for lbl in col_labels])
+        hdr = header_row(col_labels, CW, CH)
         grid.append(hdr); grid.append(np.full((3, hdr.shape[1]), 80, np.uint8))
         for i, w in enumerate(writers):
             ref = rng.choice(by_w[w])
@@ -102,9 +97,7 @@ def main():
                      cell(gt, f"목표: {target[:24]}", CW, CH, highlight=True),
                      cell(g_old, "OLD", CW, CH),
                      cell(g_new, "NEW", CW, CH)]
-            row = np.hstack(cells)
-            if row.shape[1] < full_w:
-                row = np.hstack([row, np.full((row.shape[0], full_w - row.shape[1]), 255, np.uint8)])
+            row = fit_row(cells, full_w)
             grid.append(row); grid.append(np.full((6, row.shape[1]), 80, np.uint8))
             print(f"  {base}: {target[:30]!r}")
         body = np.vstack(grid); Wd = body.shape[1]

@@ -545,12 +545,12 @@ n=100, cfg=1.0, coherent:
 ```bash
 # 0) 카드용 before/after figure (영문 라벨, /tmp/relfig 에 4장)
 #    - VAE 복원: 원본 emuru_vae vs 릴리즈 VAE (한글/영어)
-for L in ko en; do CUDA_VISIBLE_DEVICES=0 PYTHONPATH=. .venv/bin/python experiments/_eval_vae_recon.py --lang $L --label-lang en \
+for L in ko en; do CUDA_VISIBLE_DEVICES=0 .venv/bin/python experiments/_eval_vae_recon.py --lang $L --label-lang en \
   --models "original=blowing-up-groundhogs/emuru_vae" "ours=finetune_runs/vae_korean_full_mse/vae_s28000" \
   --out /tmp/relfig/recon_$L.png; done
 #    - 생성: 원본 영어 pretrained(원본 VAE) vs 릴리즈(한글 VAE + 재적응 T5)
 PRE=$(ls ~/.cache/huggingface/hub/models--blowing-up-groundhogs--eruku/snapshots/*/pytorch_model.bin | head -1)
-CUDA_VISIBLE_DEVICES=0 PYTHONPATH=. .venv/bin/python experiments/_eval_gen_compare.py --ckpt-before "$PRE" \
+CUDA_VISIBLE_DEVICES=0 .venv/bin/python experiments/_eval_gen_compare.py --ckpt-before "$PRE" \
   --ckpt-after finetune_runs/eruku_short_fullmse/checkpoint_step_030000.pth \
   --label-before "BEFORE: original pretrained (English, original VAE)" \
   --label-after "AFTER: this release (Korean VAE + re-adapted T5)" \

@@ -18,11 +18,8 @@ import numpy as np, torch
 from PIL import Image
 import torch.nn.functional as F
 
-HERE = Path(__file__).resolve().parent
-import sys; sys.path.insert(0, str(HERE))
-from infer_show import load_model, load_style, gen_arr, cell, label_img
-
-HW_DIR = HERE / "custom_datasets" / "hw_line_sample"
+from _common import REPO, HW_DIR, load_line_x11, read_hw_labels, header_row, fit_row
+from infer_show import load_model, load_style, gen_from_style, cell, label_img
 
 
 def bbox_crop_gray(p, thr=180, bthr=215, dens_col=0.03, dens_row=0.006, solid=0.55, pad=4):
@@ -50,12 +47,9 @@ def bbox_crop_gray(p, thr=180, bthr=215, dens_col=0.03, dens_row=0.006, solid=0.
     return a[yy0:yy1, xx0:xx1]
 
 
-def style_from_gray(a_u8, h=64):
-    """grayscale [H,W] uint8 → style tensor [3,64,W] [-1,1] (load_style 와 동일 규약)."""
-    t = torch.from_numpy(a_u8.astype(np.float32) / 255.0)[None, None]
-    w = max(1, int(round(h * a_u8.shape[1] / a_u8.shape[0])))
-    t = F.interpolate(t, size=(h, w), mode="bilinear", align_corners=False).clamp(0, 1)
-    return (t * 2 - 1)[0].repeat(3, 1, 1)
+def style_from_gray(a_u8):
+    """grayscale [H,W] uint8 → style tensor [3,64,W] [-1,1] (load_style 와 동일 규약, 패딩 없음)."""
+    return load_line_x11(a_u8, pad8=False)[0].repeat(3, 1, 1)
 
 # (라벨, ckpt, vae_checkpoint) — 파이프라인 단계별. vae=None 이면 ckpt 내장 VAE 사용.
 MODELS = [
@@ -67,20 +61,9 @@ MODELS = [
 ]
 
 
-def read_labels(d: Path):
-    rows = []
-    for ln in (d / "label.txt").read_text(encoding="utf-8").splitlines():
-        if "\t" in ln:
-            fn, txt = ln.split("\t", 1)
-            p = d / fn.strip()
-            if p.exists():
-                rows.append((p, txt.strip()))
-    return rows
-
-
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=str(HERE / "finetune_runs/eruku_short_fullmse/_eval/mirror_models.png"))
+    ap.add_argument("--out", default=str(REPO / "finetune_runs/eruku_short_fullmse/_eval/mirror_models.png"))
     ap.add_argument("--cfg", type=float, default=1.25)
     ap.add_argument("--max-new-tokens", type=int, default=480)
     ap.add_argument("--seed", type=int, default=0)
@@ -96,7 +79,7 @@ def main():
     device = torch.device(args.device)
     CW, CH = args.cell_w, args.cell_h
 
-    lines = read_labels(HW_DIR)
+    lines = read_hw_labels(HW_DIR)
     if not lines:
         raise SystemExit(f"라인샘플 없음: {HW_DIR}")
     # 짧은→긴 다양 길이로 8개 선택(균등 인덱스)
@@ -120,17 +103,13 @@ def main():
             return style_from_gray(bbox_crop_gray(style_path))
         return load_style(style_path)
 
-    @torch.no_grad()
     def echo(model, style_path, text):
-        style_img = style_of(style_path).unsqueeze(0).to(device)       # [1,3,64,W]
-        mi = model.get_model_inputs([style_img[0]], None, style_len=style_img.shape[-1],
-                                    gen_len=None, max_img_len=4096)
-        dec = mi["decoder_inputs_embeds"].to(device); spx = dec.shape[1] * 8
-        torch.manual_seed(args.seed)                                   # 모델 간 동일 조건
-        return gen_arr(model, dec, text, text, args.cfg, args.max_new_tokens, spx, device)
+        return gen_from_style(model, style_of(style_path), text, text,
+                              args.cfg, args.max_new_tokens, device,
+                              max_img_len=4096, seed=args.seed)        # 모델 간 동일 조건
 
     grid = []
-    hdr = np.hstack([cell(np.full((CH, CW), 245, np.uint8), lbl, CW, CH) for lbl in col_labels])
+    hdr = header_row(col_labels, CW, CH)
     grid.append(hdr); grid.append(np.full((3, hdr.shape[1]), 80, np.uint8))
     for style_path, text in sel:
         hw = bbox_crop_gray(style_path) if args.bbox_crop else np.array(Image.open(style_path).convert("L"))
@@ -143,9 +122,7 @@ def main():
             gm = max(6, int(g.shape[1] * 0.06))
             g = np.pad(g, ((2, 2), (gm, gm)), constant_values=255)
             cells.append(cell(g, lbl, CW, CH))
-        row = np.hstack(cells)
-        if row.shape[1] < full_w:
-            row = np.hstack([row, np.full((row.shape[0], full_w - row.shape[1]), 255, np.uint8)])
+        row = fit_row(cells, full_w)
         grid.append(row); grid.append(np.full((6, row.shape[1]), 80, np.uint8))
         print(f"  {style_path.name}: {text[:30]!r}")
     body = np.vstack(grid); Wd = body.shape[1]

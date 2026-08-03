@@ -16,8 +16,8 @@ import numpy as np, torch, torch.nn.functional as F
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from infer_show import load_model, gen_arr, render_in_font
-from eval_echo_metrics import build_texts, style_tensor, font_can_render
+from infer_show import load_model, render_in_font, style_tensor, gen_from_style
+from eval_echo_metrics import build_texts, font_can_render
 from train_aux_htr import load_pretrained_htr, cer as char_cer
 from custom_datasets.korean_alphabet import get_korean_alphabet
 from custom_datasets.subsequent_mask import subsequent_mask
@@ -91,12 +91,10 @@ def main():
         if fp is None:
             continue
         gt = render_in_font(fp, text)
-        st = style_tensor(gt).unsqueeze(0).to(dev)
-        mi = model.get_model_inputs([st[0]], None, style_len=st.shape[-1], gen_len=None, max_img_len=2048)
-        dec = mi["decoder_inputs_embeds"].to(dev); spx = dec.shape[1] * 8
         stext = "" if args.no_style_text else text
         try:
-            gen = gen_arr(model, dec, stext, text, args.cfg, args.max_new_tokens, spx, dev)
+            gen = gen_from_style(model, style_tensor(gt), stext, text,
+                                 args.cfg, args.max_new_tokens, dev)
         except Exception as e:
             print(f"  [skip] {e}"); continue
         hyp_gen = htr_read(htr, to_htr_input(gen, dev), dev)[0]

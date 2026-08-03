@@ -8,12 +8,11 @@ import sys, argparse
 from pathlib import Path
 import numpy as np, torch
 from PIL import Image
-from torchvision import transforms as T
-from fontTools.ttLib import TTFont
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-from infer_show import load_model, render_in_font, gen_arr, cell, label_img
+from infer_show import load_model, render_in_font, style_tensor, gen_from_style, cell, label_img
+from eval_echo_metrics import font_can_render as can_render
 
 PRE = "/home/boinit/.cache/huggingface/hub/models--blowing-up-groundhogs--eruku/snapshots/13f4f7501f0f1d7270da08fded134c57d3635705/pytorch_model.bin"
 MODELS = [
@@ -31,21 +30,6 @@ TEXTS = [
 ]
 FONTS_DIR = HERE / "assets" / "fonts_korean_v2" / "train"
 CW, CH = 380, 72
-
-
-def style_tensor(arr, h=64):
-    img = Image.fromarray(arr).convert("RGB")
-    w, hh = img.size
-    img = img.resize((max(1, int(w * (h / hh))), h), Image.BILINEAR)
-    return T.Compose([T.ToTensor(), T.Normalize((0.5,) * 3, (0.5,) * 3)])(img)
-
-
-def can_render(fp, text):
-    try:
-        cm = TTFont(str(fp)).getBestCmap()
-    except Exception:
-        return False
-    return all(ord(c) in cm for c in text if not c.isspace())
 
 
 def main():
@@ -66,11 +50,8 @@ def main():
         print(f"loading {name} ...")
         model, step = load_model(ck, device)
         for t, _, gt in samples:
-            st = style_tensor(gt).unsqueeze(0).to(device)
-            mi = model.get_model_inputs([st[0]], None, style_len=st.shape[-1], gen_len=None, max_img_len=2048)
-            dec = mi["decoder_inputs_embeds"].to(device); spx = dec.shape[1] * 8
             stext = "" if args.no_style_text else t
-            g = gen_arr(model, dec, stext, t, 1.0, 480, spx, device)   # max_new 480 (긴문장)
+            g = gen_from_style(model, style_tensor(gt), stext, t, 1.0, 480, device)  # max_new 480 (긴문장)
             gens[name].append(g)
         del model
         torch.cuda.empty_cache()

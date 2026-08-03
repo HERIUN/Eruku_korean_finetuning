@@ -13,12 +13,11 @@ from pathlib import Path
 import numpy as np, torch
 from PIL import Image
 
-HERE = Path(__file__).resolve().parent
-import sys; sys.path.insert(0, str(HERE))
-from infer_show import load_model, render_in_font, gen_arr, cell, label_img
-from eval_echo_metrics import style_tensor, font_can_render
+from _common import REPO, header_row, fit_row
+from infer_show import load_model, render_in_font, style_tensor, gen_from_style, cell, label_img
+from eval_echo_metrics import font_can_render
 
-FONTS_DIR = HERE / "assets" / "custom_hw_fonts"
+FONTS_DIR = REPO / "assets" / "custom_hw_fonts"
 STYLE_PHRASE = "한국어 손글씨 스타일 미리보기"      # 각 폰트의 style 조건(타겟과 다른 문장)
 TARGETS = ["밝은 햇살", "붉은 노을 짧은 봄밤",
            "인공지능 모델 성능 평가",
@@ -32,7 +31,7 @@ MODELS = [
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default=str(HERE / "finetune_runs/eruku_short_fullmse/_eval/gen_heldout_fonts.png"))
+    ap.add_argument("--out", default=str(REPO / "finetune_runs/eruku_short_fullmse/_eval/gen_heldout_fonts.png"))
     ap.add_argument("--cfg", type=float, default=1.25)
     ap.add_argument("--max-new-tokens", type=int, default=320)
     ap.add_argument("--seed", type=int, default=0)
@@ -56,17 +55,13 @@ def main():
     col_labels = ["style ref (이 폰트)", "정답 (이 폰트)"] + [lbl for lbl, _ in models]
     ncol = len(col_labels); full_w = ncol * (CW + 4)
 
-    @torch.no_grad()
     def gen(model, fp, target):
-        style_arr = render_in_font(fp, STYLE_PHRASE)
-        st = style_tensor(style_arr).unsqueeze(0).to(dev)
-        mi = model.get_model_inputs([st[0]], None, style_len=st.shape[-1], gen_len=None, max_img_len=2048)
-        dec = mi["decoder_inputs_embeds"].to(dev); spx = dec.shape[1] * 8
-        torch.manual_seed(args.seed)
-        return gen_arr(model, dec, STYLE_PHRASE, target, args.cfg, args.max_new_tokens, spx, dev)
+        return gen_from_style(model, style_tensor(render_in_font(fp, STYLE_PHRASE)),
+                              STYLE_PHRASE, target, args.cfg, args.max_new_tokens, dev,
+                              seed=args.seed)
 
     grid = []
-    hdr = np.hstack([cell(np.full((CH, CW), 245, np.uint8), lbl, CW, CH) for lbl in col_labels])
+    hdr = header_row(col_labels, CW, CH)
     grid.append(hdr); grid.append(np.full((3, hdr.shape[1]), 80, np.uint8))
     for fp in fonts:
         writer = fp.stem.replace("AIHandwriting-", "").replace("-Hybrid-Full-Plus", "")
@@ -79,9 +74,7 @@ def main():
                      cell(gt, f"목표: {target[:22]}", CW, CH, highlight=True)]
             for lbl, m in models:
                 cells.append(cell(gen(m, fp, target), lbl.split(" ")[0], CW, CH))
-            row = np.hstack(cells)
-            if row.shape[1] < full_w:
-                row = np.hstack([row, np.full((row.shape[0], full_w - row.shape[1]), 255, np.uint8)])
+            row = fit_row(cells, full_w)
             grid.append(row); grid.append(np.full((6, row.shape[1]), 80, np.uint8))
             print(f"  {writer}: {target[:26]!r}")
     body = np.vstack(grid); Wd = body.shape[1]

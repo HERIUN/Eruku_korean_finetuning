@@ -4,8 +4,7 @@
 해결: 모든 복원을 **공통 캔버스(h=64 grayscale)** 로 리샘플해 같은 기준(원본의 h=64 판)과 비교.
       추가로 한글 HTR CER(리더가 내부에서 h=64 로 맞추므로 스케일 무관)도 같이 본다.
 """
-import sys
-from pathlib import Path
+import argparse
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -13,29 +12,20 @@ from PIL import Image
 from diffusers import AutoencoderKL
 from skimage.metrics import structural_similarity as ssim
 
-REPO = Path("/data/work/dgkang/Eruku_korean_finetuning")
-sys.path.insert(0, str(REPO))
+from _common import HTR_CKPT, TRAIN_FONTS, read_hw_labels, read_cer
 from infer_show import render_in_font
-from eval_htr_cer import to_htr_input, htr_read, norm
-from train_aux_htr import load_pretrained_htr, cer as char_cer
-
-dev = torch.device("cuda")
-vae = AutoencoderKL.from_pretrained("HERIUN/emuru_vae_korean").eval().to(dev)
-htr = load_pretrained_htr(REPO / "finetune_runs/aux_htr_ko/htr_s20000").to(dev).eval()
+from train_aux_htr import load_pretrained_htr
 
 TEXTS = ["형형색색 꽃들이 활짝 피어난 봄날의 공원", "2024년 10월 15일 서울특별시 강남구 역삼동",
          "인공지능 모델의 한국어 생성 성능 평가", "다람쥐 헌 쳇바퀴에 타고파 오늘도 힘차게"]
-fonts = sorted((REPO / "assets/fonts_korean_v2/train").glob("*.ttf"))[:3]
-samples = [("font", Image.fromarray(render_in_font(f, t)), t) for t in TEXTS for f in fonts]
-lab = {}
-for ln in (REPO / "custom_datasets/hw_line_sample/label.txt").read_text(encoding="utf-8").splitlines():
-    if "\t" in ln:
-        k, v = ln.rstrip("\n").split("\t", 1)
-        lab[k] = v
-for p in sorted((REPO / "custom_datasets/hw_line_sample").glob("line_*.png")):
-    samples.append(("scan", Image.open(p), lab[p.name]))
-print(f"samples: {sum(1 for s in samples if s[0]=='font')} font + "
-      f"{sum(1 for s in samples if s[0]=='scan')} scan  (원본 크기 예: {samples[-1][1].size})")
+
+
+def build_samples(n_font_files=3):
+    fonts = sorted(TRAIN_FONTS.glob("*.ttf"))[:n_font_files]
+    samples = [("font", Image.fromarray(render_in_font(f, t)), t) for t in TEXTS for f in fonts]
+    for p, txt in read_hw_labels():
+        samples.append(("scan", Image.open(p), txt))
+    return samples
 
 
 def canon(img, h=64):
@@ -72,7 +62,7 @@ def prep_rec(img, h=64):
 
 
 @torch.no_grad()
-def run(name, prep):
+def run(name, prep, samples, vae, htr, dev):
     ms, ss, cers, floors, shapes = [], [], [], [], []
     for kind, img, text in samples:
         x, pad = prep(img)
@@ -93,8 +83,8 @@ def run(name, prep):
 
         rec_u8 = (rec01[0, 0].numpy() * 255).astype(np.uint8)
         ref_u8 = (ref[0, 0].numpy() * 255).astype(np.uint8)
-        cers.append(char_cer([norm(htr_read(htr, to_htr_input(rec_u8, dev), dev)[0])], [norm(text)]))
-        floors.append(char_cer([norm(htr_read(htr, to_htr_input(ref_u8, dev), dev)[0])], [norm(text)]))
+        cers.append(read_cer(htr, rec_u8, text, dev))
+        floors.append(read_cer(htr, ref_u8, text, dev))
 
     n_font = sum(1 for s in samples if s[0] == "font")
     def agg(v, sl):
@@ -109,12 +99,32 @@ def run(name, prep):
                 cer=float(v_c.mean()), floor=float(v_f.mean()))
 
 
-rows = [run("① 최소 (원본 해상도, [0,1], 3ch)", prep_min),
-        run("② 리사이즈만 (h64, [0,1])", prep_resize_only),
-        run("③ 권장 (h64 + [-1,1] + 8배수 패딩)", prep_rec)]
-print("\n=== 요약(전체 32줄) ===")
-base = rows[0]
-for r in rows:
-    d_mse = (r["mse"] / base["mse"] - 1) * 100
-    print(f"  {r['name']:34s} MSE={r['mse']:.4f} ({d_mse:+.0f}%)  SSIM={r['ssim']:.3f}  "
-          f"CER={r['cer']:.3f}  손상={r['cer']-r['floor']:+.3f}")
+def main():
+    ap = argparse.ArgumentParser(description=__doc__,
+                                 formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--vae", default="HERIUN/emuru_vae_korean", help="평가할 VAE(경로 또는 hub id)")
+    ap.add_argument("--n-fonts", type=int, default=3, help="폰트 렌더에 쓸 폰트 수")
+    ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    args = ap.parse_args()
+
+    dev = torch.device(args.device)
+    vae = AutoencoderKL.from_pretrained(args.vae).eval().to(dev)
+    htr = load_pretrained_htr(HTR_CKPT).to(dev).eval()
+    samples = build_samples(args.n_fonts)
+    n_font = sum(1 for s in samples if s[0] == "font")
+    print(f"samples: {n_font} font + {len(samples)-n_font} scan  "
+          f"(원본 크기 예: {samples[-1][1].size})")
+
+    rows = [run("① 최소 (원본 해상도, [0,1], 3ch)", prep_min, samples, vae, htr, dev),
+            run("② 리사이즈만 (h64, [0,1])", prep_resize_only, samples, vae, htr, dev),
+            run("③ 권장 (h64 + [-1,1] + 8배수 패딩)", prep_rec, samples, vae, htr, dev)]
+    print(f"\n=== 요약(전체 {len(samples)}줄) ===")
+    base = rows[0]
+    for r in rows:
+        d_mse = (r["mse"] / base["mse"] - 1) * 100
+        print(f"  {r['name']:34s} MSE={r['mse']:.4f} ({d_mse:+.0f}%)  SSIM={r['ssim']:.3f}  "
+              f"CER={r['cer']:.3f}  손상={r['cer']-r['floor']:+.3f}")
+
+
+if __name__ == "__main__":
+    main()

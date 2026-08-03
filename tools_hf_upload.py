@@ -58,7 +58,7 @@ VAE_ARCH_KEYS = ("in_channels", "out_channels", "latent_channels", "sample_size"
 # ─────────────────────────────────────────────────────────────────────────────
 # 근거: docs/VAE_ROBUSTNESS.md ② — 스캔 여백/테두리가 VAE latent std 를 폰트 대비 6~29배로
 # 튀겨 T5 를 OOD 로 밀고(runaway/blank) 생성이 무너진다. 학습이 style 을 항상 프레임 꽉 찬
-# 상태로만 봤기 때문. 추론 단계 크롭으로 재학습 없이 해결된다(_eval_mirror_compare.py 검증).
+# 상태로만 봤기 때문. 추론 단계 크롭으로 재학습 없이 해결된다(experiments/_eval_mirror_compare.py 검증).
 BBOX_HELPER = '''
 
 def ink_bbox_crop(image: "Image.Image", thr: int = 180, bthr: int = 215,
@@ -123,17 +123,60 @@ PATCH_BODY_NEW = """        # Preprocess style image
         style_img = style_image.convert('RGB')"""
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# modeling_eruku.py 패치 ②: style prefix 크롭을 실제 SOG 열에서 자른다
+# ─────────────────────────────────────────────────────────────────────────────
+# 증상: style_text 를 주면 생성 이미지 앞에 gen_text 에 없는 글자(style 텍스트 꼬리)가 남는다.
+# 원인: generate() 는 style_text 가 비어있지 않으면 SOG 를 디코더에 넣지 않고(모델이 스스로
+# 내야 함), 그 사이 모델이 뱉는 IMG 토큰마다 latent 열이 z_sequence 에 쌓인다(style 이어그리기).
+# 그런데 크롭은 `style 열 수 + 1` 이라는 고정 오프셋 — "SOG 는 정확히 한 열"을 가정하므로
+# 그 사이 그려진 k 열이 그대로 남는다. style_text="" 경로는 SOG 가 강제 주입돼 k=0 이라 안 보인다.
+# 고침: 같이 만들어지는 special_sequence(3=style, 2=IMG, 0=SOG, 1=EOG)에서 첫 SOG 위치를 찾아
+# 그 다음 열부터 자른다. 학습 harness 의 infer_show.gen_arr 와 같은 규약.
+PATCH_CROP_OLD = """        z_sequence = z_sequence[:,:,:,decoder_inputs_embeds_vae.size(1)+1:]"""
+PATCH_CROP_NEW = """        # Crop the style prefix off at the *actual* SOG column. With a non-empty
+        # style_text the model has to emit SOG itself, and every IMG token it
+        # produces before that keeps drawing the style text -- a fixed
+        # "style columns + 1" offset would leave those columns in the output.
+        # special_sequence is 1:1 with the latent columns (3=style, 2=IMG,
+        # 0=SOG, 1=EOG), so the first SOG marks the real style->gen boundary.
+        q = self.config.slices_per_query
+        sog_at = (special_sequence == 0).nonzero().flatten()
+        cut = (int(sog_at[0].item()) + 1) if len(sog_at) else decoder_inputs_embeds_vae.size(1) + 1
+        # Never crop away everything (model may hit max_new_tokens right at SOG).
+        z_sequence = z_sequence[:, :, :, min(cut * q, max(0, z_sequence.size(-1) - q)):]"""
+
+
+def _apply_patch(src: str, name: str, marker: str, steps) -> str:
+    """치환 목록 steps=[(old, new)…] 를 원자적으로 적용.
+
+    `marker` 가 이미 있으면 그 패치는 건너뛴다 — `--code-from` 이 (직전 릴리즈로 이미 패치된)
+    발행 repo 를 가리켜도 나머지 패치는 계속 적용되게 하려는 것. 앵커가 정확히 1번 안 잡히면
+    (upstream remote code 가 바뀐 것) 조용히 넘어가지 않고 abort.
+    """
+    if marker in src:
+        print(f"[patch] {name}: 이미 적용돼 있음 — 건너뜀")
+        return src
+    for old, _ in steps:
+        if src.count(old) != 1:
+            raise SystemExit(f"[patch] {name}: 앵커를 정확히 1번 찾지 못함 (n={src.count(old)}):\n{old}")
+    for old, new in steps:
+        src = src.replace(old, new)
+    print(f"[patch] {name}: 적용")
+    return src
+
+
 def patch_modeling(src: str) -> str:
-    """modeling_eruku.py 소스에 ink-bbox 크롭을 주입. 앵커가 하나라도 없으면 예외."""
-    if "def ink_bbox_crop" in src:
-        raise SystemExit("[patch] 이미 패치된 modeling_eruku.py 입니다 (ink_bbox_crop 존재)")
-    for anchor in (PATCH_ANCHOR_CLASS, PATCH_SIG_OLD, PATCH_DOC_OLD, PATCH_BODY_OLD):
-        if src.count(anchor) != 1:
-            raise SystemExit(f"[patch] 앵커를 정확히 1번 찾지 못함 (n={src.count(anchor)}):\n{anchor}")
-    src = src.replace(PATCH_ANCHOR_CLASS, BBOX_HELPER.strip("\n") + "\n\n\n" + PATCH_ANCHOR_CLASS)
-    src = src.replace(PATCH_SIG_OLD, PATCH_SIG_NEW)
-    src = src.replace(PATCH_DOC_OLD, PATCH_DOC_NEW)
-    src = src.replace(PATCH_BODY_OLD, PATCH_BODY_NEW)
+    """modeling_eruku.py 소스에 ink-bbox 크롭 + SOG 기준 크롭을 주입."""
+    src = _apply_patch(src, "ink-bbox 크롭", "def ink_bbox_crop", [
+        (PATCH_ANCHOR_CLASS, BBOX_HELPER.strip("\n") + "\n\n\n" + PATCH_ANCHOR_CLASS),
+        (PATCH_SIG_OLD, PATCH_SIG_NEW),
+        (PATCH_DOC_OLD, PATCH_DOC_NEW),
+        (PATCH_BODY_OLD, PATCH_BODY_NEW),
+    ])
+    src = _apply_patch(src, "SOG 기준 style 크롭", "sog_at", [
+        (PATCH_CROP_OLD, PATCH_CROP_NEW),
+    ])
     return src
 
 
@@ -580,7 +623,10 @@ License: Apache-2.0, inherited from the base model.
 
 
 def _staging_code(out: Path, code_from: str):
-    """기존 repo 의 remote code 를 받아 bbox 패치 후 스테이징. (config.json 원본도 반환)"""
+    """기존 repo 의 remote code 를 받아 패치(bbox 크롭 + SOG 크롭) 후 스테이징.
+
+    (config.json 원본도 반환)
+    """
     from huggingface_hub import hf_hub_download
     out.mkdir(parents=True, exist_ok=True)
     cfg_json = json.loads(Path(hf_hub_download(code_from, "config.json")).read_text())
@@ -588,7 +634,7 @@ def _staging_code(out: Path, code_from: str):
     mod_src = Path(hf_hub_download(code_from, "modeling_eruku.py")).read_text()
     (out / "configuration_eruku.py").write_text(conf_src, encoding="utf-8")
     (out / "modeling_eruku.py").write_text(patch_modeling(mod_src), encoding="utf-8")
-    print(f"[model] remote code 스테이징 + bbox 패치 적용 ({code_from})")
+    print(f"[model] remote code 스테이징 + 패치 적용(bbox 크롭, SOG 크롭) ({code_from})")
     return cfg_json
 
 
@@ -689,7 +735,8 @@ def cmd_model(args):
         # 구 revision 의 pytorch_model.bin 이 남으면 weight 파일 2개가 공존 → 삭제
         dele = None if args.bin else ["pytorch_model.bin"]
         _push(_api(args.token), out, args.repo,
-              f"Update to full-VAE combo (T5 step {step} + Korean VAE); add ink-bbox style crop",
+              f"Update to full-VAE combo (T5 step {step} + Korean VAE); "
+              f"add ink-bbox style crop; crop the style prefix at the real SOG column",
               delete_patterns=dele)
     else:
         print("[model] dry-run — 업로드는 --push")
@@ -699,7 +746,8 @@ def _verify_cer(hf_model, args):
     """변환본을 **공개 API 그대로**(generate_handwriting) 돌려 한글 CER 을 잰다.
 
     가중치 키 정합성(missing/unexpected 0)만으로는 "릴리즈 경로로 실제 잘 생성되는가"를
-    보장하지 못한다(릴리즈 클래스와 학습 클래스는 style prefix 처리·crop 규약이 다르다).
+    보장하지 못한다(릴리즈 클래스는 style prefix 를 generate() 안에서 직접 잘라낸다 —
+    학습 클래스는 안 자르고 호출자가 자른다).
     그래서 로컬 harness 수치(eval_htr_cer.py)와 같은 리더로 재서 임계 이내인지 확인한다.
     추가로 실제 스캔 손글씨 한 장에 bbox 크롭 on/off 를 돌려 패치 동작을 확인한다.
     """
@@ -787,10 +835,10 @@ def main():
     v.add_argument("--out", default="/tmp/hf_emuru_vae_korean")
     v.add_argument("--push", action="store_true")
     v.add_argument("--figures-dir", default=None,
-                   help="카드에 넣을 figure 디렉토리. recon_{ko,en}.png(_eval_vae_recon.py --label-lang en) + "
-                        "gencmp_{ko,en}_release.png(_eval_gen_compare.py --cats ko_release en_release). "
+                   help="카드에 넣을 figure 디렉토리. recon_{ko,en}.png(experiments/_eval_vae_recon.py --label-lang en) + "
+                        "gencmp_{ko,en}_release.png(experiments/_eval_gen_compare.py --cats ko_release en_release). "
                         "있는 파일만 samples/ 로 올리고 카드에 삽입")
-    # 모델카드 수치 (_eval_vae_recon.py 고정 probe 평균)
+    # 모델카드 수치 (experiments/_eval_vae_recon.py 고정 probe 평균)
     v.add_argument("--orig-ko", default="0.0188"); v.add_argument("--orig-ko-ssim", default="0.904")
     v.add_argument("--orig-hard", default="0.0197"); v.add_argument("--orig-en", default="0.0020")
     v.add_argument("--new-ko", default="0.0031"); v.add_argument("--new-ko-ssim", default="0.977")
@@ -807,7 +855,7 @@ def main():
     m.add_argument("--push", action="store_true")
     m.add_argument("--figures-dir", default=None,
                    help="카드에 넣을 생성 비교 figure 디렉토리(gencmp_{ko,en}_release.png). "
-                        "_eval_gen_compare.py --cats ko_release en_release 로 생성")
+                        "experiments/_eval_gen_compare.py --cats ko_release en_release 로 생성")
     m.add_argument("--bin", action="store_true", help="safetensors 대신 pytorch_model.bin 으로 저장")
     m.add_argument("--verify-cer", action="store_true",
                    help="변환본을 공개 API 로 돌려 한글 CER 측정 + bbox 크롭 smoke test (GPU 필요)")

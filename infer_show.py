@@ -75,10 +75,16 @@ def render_in_font(font_path, text, size=72, pad=14):
     return arr
 
 
-def load_style(path, h=64):
-    img = Image.open(path).convert("RGB"); w, hh = img.size
+def style_tensor(arr, h=64):
+    """라인이미지 배열 → style 텐서 [3,h,W] [-1,1] (BILINEAR h-리사이즈)."""
+    img = Image.fromarray(arr).convert("RGB")
+    w, hh = img.size
     img = img.resize((max(1, int(w * (h / hh))), h), Image.BILINEAR)
     return T.Compose([T.ToTensor(), T.Normalize((0.5,)*3, (0.5,)*3)])(img)
+
+
+def load_style(path, h=64):
+    return style_tensor(np.array(Image.open(path).convert("RGB")), h)
 
 
 def gen_arr(model, dec, ref_text, seed_text, cfg, max_new, style_px, device):
@@ -88,14 +94,36 @@ def gen_arr(model, dec, ref_text, seed_text, cfg, max_new, style_px, device):
     # 깨끗한 gen 영역만 자르기: 고정 style_px 로 자르면 모델이 마저 그린 style 텍스트 echo 가
     # 남는다. generate 가 돌려주는 special_sequence (3=style img, 2=image, 0=SOG, 1=EOG)
     # 에서 SOG 위치가 style(+echo)→gen 의 진짜 경계 (continue_gen_test 참고).
-    sp = special.repeat_interleave(8)[:img.shape[-1]]   # latent→pixel (8px/latent)
-    sog = (sp == 0).nonzero().flatten()
+    # SOG 는 latent '한 열'(=8px) 이므로 그 열 전체를 넘겨야 한다(+1 이면 7px 이 남는다).
+    sog = (special == 0).nonzero().flatten()            # latent 열 인덱스
     if len(sog) > 0:
-        g = img[:, :, :, int(sog[0].item()) + 1:]       # 첫 SOG 이후 = gen 텍스트
+        start = (int(sog[0].item()) + 1) * 8           # 첫 SOG 열 '다음'부터 = gen 텍스트
+        g = img[:, :, :, start:] if img.shape[-1] > start else img[:, :, :, -8:]
     else:
         g = img[:, :, :, style_px:] if img.shape[-1] > style_px else img
     return np.array(torchvision.transforms.ToPILImage()(
         ((g[0] + 1) / 2).clamp(0, 1).cpu()).convert("L"))
+
+
+@torch.no_grad()
+def gen_from_style(model, style_img, style_text, gen_text, cfg, max_new, device,
+                   max_img_len=2048, seed=None):
+    """style 텐서([3,h,W] 또는 [1,3,h,W]) → 생성 라인이미지 [H,W] uint8.
+
+    eval/실험 스크립트들이 반복하던 style → get_model_inputs → gen_arr 블록.
+    seed 를 주면 생성 직전 torch.manual_seed (모델/조건 간 동일 비교용).
+    같은 style 로 여러 텍스트를 생성할 땐 이 함수 대신 decoder embeds 를 재사용할 것
+    (infer_show/infer_matrix 의 main 참고 — 여긴 매 호출 VAE encode 를 다시 한다).
+    """
+    if style_img.dim() == 3:
+        style_img = style_img.unsqueeze(0)
+    style_img = style_img.to(device)
+    mi = model.get_model_inputs([style_img[0]], None, style_len=style_img.shape[-1],
+                                gen_len=None, max_img_len=max_img_len)
+    dec = mi["decoder_inputs_embeds"].to(device)
+    if seed is not None:
+        torch.manual_seed(seed)
+    return gen_arr(model, dec, style_text, gen_text, cfg, max_new, dec.shape[1] * 8, device)
 
 
 def load_model(ckpt, device, vae_checkpoint=None):

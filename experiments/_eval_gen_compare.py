@@ -22,10 +22,10 @@ from pathlib import Path
 import numpy as np, torch
 from PIL import Image
 
-HERE = Path(__file__).resolve().parent
-import sys; sys.path.insert(0, str(HERE))
-from infer_show import (load_model, load_style, render_in_font, gen_arr, cell, label_img, FONTS_DIR)
-from eval_echo_metrics import font_can_render, style_tensor
+from _common import REPO, header_row, fit_row
+from infer_show import (load_model, render_in_font, style_tensor, gen_from_style,
+                        cell, label_img, FONTS_DIR)
+from eval_echo_metrics import font_can_render
 
 # 복잡획(겹받침·쌍자음·밀집) 단문 집중 + 일반 단문/장문 대조군.
 CATS = {
@@ -68,14 +68,14 @@ def main():
                     help="1·2열 라벨(조건/정답). 공개 figure 는 영문으로 넘긴다")
     ap.add_argument("--row-label-fmt", nargs=2, default=["ref: {font}", "목표: {text}"],
                     help="1·2열 셀 라벨 포맷({font}/{text} 치환)")
-    ap.add_argument("--lines-json", default=str(HERE / "data" / "ref_set_clean" / "train_lines.json"))
+    ap.add_argument("--lines-json", default=str(REPO / "data" / "ref_set_clean" / "train_lines.json"))
     ap.add_argument("--style-fonts-dir", default=None,
                     help="주면 lines_json 대신 이 디렉토리 폰트로 style ref 를 즉석 렌더(--style-text 를 씀). "
                          "영어 pretrained 와 비교할 때 필수 — 한글폰트 style 은 그 모델엔 OOD 라 "
                          "타깃 스크립트와 무관하게 붕괴해서 baseline 을 과소평가한다")
     ap.add_argument("--style-text", default="The quick brown fox jumps",
                     help="--style-fonts-dir 사용 시 style ref 로 렌더할 텍스트(전사로도 조건에 들어감)")
-    ap.add_argument("--out-dir", default=str(HERE / "finetune_runs" / "eruku_short_fullmse" / "_eval"))
+    ap.add_argument("--out-dir", default=str(REPO / "finetune_runs" / "eruku_short_fullmse" / "_eval"))
     ap.add_argument("--n-rows", type=int, default=6, help="카테고리별 행(스타일×텍스트) 수")
     ap.add_argument("--cfg", type=float, default=1.25)
     ap.add_argument("--max-new-tokens", type=int, default=320)
@@ -141,20 +141,16 @@ def main():
     col_labels = [*args.col_labels, args.label_before, args.label_after]
     ncol = len(col_labels); full_w = ncol * (CW + 4)
 
-    @torch.no_grad()
     def gen(model, ref, target):
-        style_img = style_tensor(ref["arr"]).unsqueeze(0).to(device)
-        mi = model.get_model_inputs([style_img[0]], None, style_len=style_img.shape[-1],
-                                    gen_len=None, max_img_len=2048)
-        dec = mi["decoder_inputs_embeds"].to(device); spx = dec.shape[1] * 8
-        torch.manual_seed(args.seed)                                  # before/after 동일 조건
-        return gen_arr(model, dec, ref["text"], target, args.cfg, args.max_new_tokens, spx, device)
+        return gen_from_style(model, style_tensor(ref["arr"]), ref["text"], target,
+                              args.cfg, args.max_new_tokens, device,
+                              seed=args.seed)                         # before/after 동일 조건
 
     cats = {k: v for k, v in CATS.items() if not args.cats or k in args.cats}
     for cat, texts in cats.items():
         print(f"[{cat}]")
         grid = []
-        hdr = np.hstack([cell(np.full((CH, CW), 245, np.uint8), lbl, CW, CH) for lbl in col_labels])
+        hdr = header_row(col_labels, CW, CH)
         grid.append(hdr); grid.append(np.full((3, hdr.shape[1]), 80, np.uint8))
         for i in range(args.n_rows):
             target = texts[i % len(texts)]
@@ -171,9 +167,7 @@ def main():
                      cell(gt, args.row_label_fmt[1].format(font=base, text=target[:24]), CW, CH, highlight=True),
                      cell(g_bef, "BEFORE", CW, CH),
                      cell(g_aft, "AFTER", CW, CH)]
-            row = np.hstack(cells)
-            if row.shape[1] < full_w:
-                row = np.hstack([row, np.full((row.shape[0], full_w - row.shape[1]), 255, np.uint8)])
+            row = fit_row(cells, full_w)
             grid.append(row); grid.append(np.full((6, row.shape[1]), 80, np.uint8))
             print(f"  {base}: {target[:30]!r}")
         body = np.vstack(grid); Wd = body.shape[1]
