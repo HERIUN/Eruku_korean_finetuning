@@ -132,7 +132,7 @@ Adam이 `lr=1e-4` 로 log_var를 스텝당 ~1e-4씩만 끌어내려 **15000 step
 | RUN 1 control (no logvar) | `run_logvar_clean.sh` | `finetune_runs/vae_orig_pureL1` |
 | RUN 2 treatment (`--logvar-weighting`) | `run_logvar_clean.sh` | `finetune_runs/vae_orig_pureL1_logvar` |
 
-roundtrip MSE ↓ / SSIM ↑, `_eval_vae_recon.py`, s15000:
+roundtrip MSE ↓ / SSIM ↑, `experiments/_eval_vae_recon.py`, s15000:
 
 | lang | orig(emuru) | ctrl (no logvar) | **logvar** | logvar vs ctrl |
 |---|---|---|---|---|

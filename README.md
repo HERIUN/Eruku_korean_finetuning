@@ -298,13 +298,18 @@ eval_echo_metrics.py       # echo 정량 (MSE/SSIM/LPIPS/FID)
 eval_cer.py                # echo CER (easyocr 기반 — 한글은 saturated, 교차검증용)
 eval_htr_cer.py            # 생성 CER (한글 HTR 리더, 렌더바닥 ~0.00) ← 한글 주 지표
 eval_all.py                # 통합 평가 배터리 (eval_cer+eval_echo_metrics 오케스트레이션)
-_eval_vae_recon.py         # VAE roundtrip 복원 비교 (고정 probe: ko/en/극단폰트)
-_eval_vae_hw_recon.py      # 실제 손글씨 복원 비교 (일반화)
-_eval_vae_compare.py       # VAE 여러 개 나란히 비교
-_eval_gen_compare.py       # Eruku 생성 전/후 montage (같은 VAE → 순수 T5 개선분)
-_eval_gen_heldout.py       # held-out 폰트(custom_hw_fonts) 생성 montage
-_eval_mirror_compare.py    # 실제 손글씨 style 미러링 + ink bbox 크롭 검증
 tools_hf_upload.py         # HF 릴리즈 (ckpt→릴리즈 클래스 변환 + VAE/모델 repo 업로드)
+# 일회성 실험/검증 스크립트 (결론은 본 README·docs 에 기록됨. 루트에서 PYTHONPATH=. 로 실행)
+experiments/_eval_vae_recon.py         # VAE roundtrip 복원 비교 (고정 probe: ko/en/극단폰트)
+experiments/_eval_vae_hw_recon.py      # 실제 손글씨 복원 비교 (일반화)
+experiments/_eval_vae_compare.py       # VAE 여러 개 나란히 비교
+experiments/_eval_vae_height_sweep.py  # 입력 height 스윕 — h>64 이득을 self/native 두 기준으로 측정
+experiments/_eval_vae_norm_check.py    # [-1,1] vs [0,1] 정규화 검증 (복원 + Eruku 생성까지)
+experiments/_eval_vae_prep_sweep.py    # 입력 전처리 스윕 (self MSE/SSIM + HTR CER damage)
+experiments/_eval_vae_prep_minrec.py   # 최소 vs 권장 전처리 — 공통 캔버스 기준 비교
+experiments/_eval_gen_compare.py       # Eruku 생성 전/후 montage (같은 VAE → 순수 T5 개선분)
+experiments/_eval_gen_heldout.py       # held-out 폰트(custom_hw_fonts) 생성 montage
+experiments/_eval_mirror_compare.py    # 실제 손글씨 style 미러링 + ink bbox 크롭 검증
 # 모델 / 원본 코드
 eruku_continuous_inf.py    # Emuru 모델 (forward/generate) — style-len 단위버그 수정됨
 custom_datasets/           # 원본 repo 데이터 코드 (font_square 렌더/증강, tps)
@@ -416,7 +421,7 @@ val loss 만 오르고(과적합) 영어가 소폭 퇴보한다. 아무리 더 �
 ### VAE 한글 적응 실험 결과 (2026-07): **full(enc+dec) + HTR off 가 최선**
 
 위 (a)/(c) 를 실제로 학습해 비교. 파이프라인: 한글 HTR finetune(`train_aux_htr.py`) → VAE finetune(`train_vae_korean.py`) →
-교체 검증(`infer_show.py`/`eval_cer.py --vae-checkpoint`). clean-bw roundtrip MSE(고정 probe, `_eval_vae_recon.py`):
+교체 검증(`infer_show.py`/`eval_cer.py --vae-checkpoint`). clean-bw roundtrip MSE(고정 probe, `experiments/_eval_vae_recon.py`):
 
 | VAE | 일반 한글 | 극단 폰트 | 영어 |
 |---|---|---|---|
@@ -504,7 +509,7 @@ n=100, cfg=1.0, coherent:
 **핵심 결론**:
 - 생성 품질 = **VAE(상한) × T5(상한 근접도)**. full_mse VAE 로 상한을 올린 뒤 단문강조 재적응이 T5 병목을 잡아, 단문 한글 CER 을 **0.54→0.29 로 절반** 냈다. 영어도 회귀 없이 개선.
 - **best ckpt = `finetune_runs/eruku_short_fullmse/checkpoint_step_030000.pth`**. val_mse 는 s20000(0.100)이 s30000(0.113)보다 낮지만, 실제 생성 CER 은 s30000 이 우수(전체 0.127 vs 0.138, 단문 0.286 vs 0.317) — **val_mse 노이즈는 생성품질과 무관**하므로 CER 로 고를 것.
-- 복잡획(밝·붉·닭·삶·값·짧…) 단문 생성 전후 비교: `finetune_runs/eruku_short_fullmse/_eval/gencmp_{ko_complex_short,ko_short,ko_long}.png` (재적응 전 s15000 vs 후 s30000, 동일 VAE — 차이는 순수 T5 개선분). 스크립트 `_eval_gen_compare.py`.
+- 복잡획(밝·붉·닭·삶·값·짧…) 단문 생성 전후 비교: `finetune_runs/eruku_short_fullmse/_eval/gencmp_{ko_complex_short,ko_short,ko_long}.png` (재적응 전 s15000 vs 후 s30000, 동일 VAE — 차이는 순수 T5 개선분). 스크립트 `experiments/_eval_gen_compare.py`.
 
 > 실행 환경 주의: 이 repo 는 **`.venv/bin/python`** 으로 실행한다(torch 2.9+cu128, diffusers/skimage/transformers 포함). 시스템 `python`(miniconda base)에는 numpy 조차 없다.
 
@@ -514,7 +519,7 @@ n=100, cfg=1.0, coherent:
 - **① 프로토타입 붕괴**(decoder/복원): VAE 가 입력 잉크농도를 무시하고 항상 crisp 순검정으로 snap →
   headline MSE 이득의 일부가 "crisp 타깃 snap" 이고 실제 손글씨 복원은 악화. 수정=농담보존 타깃(재학습 필요).
 - **② 실제 손글씨 runaway**(encoder/조건): style 이미지 **여백** 이 latent std 를 폰트의 6~29배로 튀겨 T5 OOD →
-  runaway/blank. **수정=밀도 기반 ink bbox 크롭**(재학습 불필요, `_eval_mirror_compare.py`). 근본은 학습이
+  runaway/blank. **수정=밀도 기반 ink bbox 크롭**(재학습 불필요, `experiments/_eval_mirror_compare.py`). 근본은 학습이
   style 을 항상 프레임 꽉 채운 상태로만 본 갭.
 
 ## HuggingFace 릴리즈 (2026-07)
@@ -534,12 +539,12 @@ n=100, cfg=1.0, coherent:
 ```bash
 # 0) 카드용 before/after figure (영문 라벨, /tmp/relfig 에 4장)
 #    - VAE 복원: 원본 emuru_vae vs 릴리즈 VAE (한글/영어)
-for L in ko en; do CUDA_VISIBLE_DEVICES=0 .venv/bin/python _eval_vae_recon.py --lang $L --label-lang en \
+for L in ko en; do CUDA_VISIBLE_DEVICES=0 PYTHONPATH=. .venv/bin/python experiments/_eval_vae_recon.py --lang $L --label-lang en \
   --models "original=blowing-up-groundhogs/emuru_vae" "ours=finetune_runs/vae_korean_full_mse/vae_s28000" \
   --out /tmp/relfig/recon_$L.png; done
 #    - 생성: 원본 영어 pretrained(원본 VAE) vs 릴리즈(한글 VAE + 재적응 T5)
 PRE=$(ls ~/.cache/huggingface/hub/models--blowing-up-groundhogs--eruku/snapshots/*/pytorch_model.bin | head -1)
-CUDA_VISIBLE_DEVICES=0 .venv/bin/python _eval_gen_compare.py --ckpt-before "$PRE" \
+CUDA_VISIBLE_DEVICES=0 PYTHONPATH=. .venv/bin/python experiments/_eval_gen_compare.py --ckpt-before "$PRE" \
   --ckpt-after finetune_runs/eruku_short_fullmse/checkpoint_step_030000.pth \
   --label-before "BEFORE: original pretrained (English, original VAE)" \
   --label-after "AFTER: this release (Korean VAE + re-adapted T5)" \
