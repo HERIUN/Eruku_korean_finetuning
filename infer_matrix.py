@@ -79,11 +79,11 @@ def main():
         ref_arr = np.array(Image.open(ref["image_path"]).convert("L"))
         cells = [cell(ref_arr, f"style ref: {w}", CW, CH)]
         # echo 열: gen == style 텍스트 (본 글자 재현)
-        echo = gen_arr(model, dec, style_text_in, ref["text"], args.cfg, args.max_new_tokens, spx, device)
+        echo = gen_arr(model, dec, style_text_in, ref["text"], args.cfg, args.max_new_tokens, spx)
         cells.append(cell(echo, f"echo(gen=style): {ref['text'][:16]}", CW, CH, highlight=True))
         # 다양 gen_text 열
         for gt in gen_texts:
-            g = gen_arr(model, dec, style_text_in, gt, args.cfg, args.max_new_tokens, spx, device)
+            g = gen_arr(model, dec, style_text_in, gt, args.cfg, args.max_new_tokens, spx)
             cells.append(cell(g, f"{gt[:20]}", CW, CH))
         grid.append(np.hstack(cells))
         grid.append(np.full((6, grid[-1].shape[1]), 80, np.uint8))

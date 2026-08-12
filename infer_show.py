@@ -105,7 +105,12 @@ def crop_gen(img, special, style_px):
         ((g + 1) / 2).clamp(0, 1).cpu()).convert("L"))
 
 
-def gen_arr(model, dec, ref_text, seed_text, cfg, max_new, style_px, device):
+def gen_arr(model, dec, ref_text, seed_text, cfg, max_new, style_px):
+    """이미 만들어둔 decoder embeds 로 1개 생성 → gen 영역 [H,W] uint8.
+
+    같은 style 로 여러 텍스트를 뽑을 때 VAE encode 를 재사용하는 경로
+    (infer_show/infer_matrix 의 main). style 텐서에서 바로 가려면 gen_from_style.
+    """
     with torch.no_grad():
         img, special = model.generate(decoder_inputs_embeds_vae=dec, style_text=[ref_text],
                                       gen_text=[seed_text], cfg_scale=cfg, max_new_tokens=max_new)
@@ -117,20 +122,13 @@ def gen_from_style(model, style_img, style_text, gen_text, cfg, max_new, device,
                    max_img_len=2048, seed=None):
     """style 텐서([3,h,W] 또는 [1,3,h,W]) → 생성 라인이미지 [H,W] uint8.
 
-    eval/실험 스크립트들이 반복하던 style → get_model_inputs → gen_arr 블록.
+    eval/실험 스크립트들이 반복하던 style → get_model_inputs → generate 블록.
     seed 를 주면 생성 직전 torch.manual_seed (모델/조건 간 동일 비교용).
     같은 style 로 여러 텍스트를 생성할 땐 이 함수 대신 decoder embeds 를 재사용할 것
     (infer_show/infer_matrix 의 main 참고 — 여긴 매 호출 VAE encode 를 다시 한다).
     """
-    if style_img.dim() == 3:
-        style_img = style_img.unsqueeze(0)
-    style_img = style_img.to(device)
-    mi = model.get_model_inputs([style_img[0]], None, style_len=style_img.shape[-1],
-                                gen_len=None, max_img_len=max_img_len)
-    dec = mi["decoder_inputs_embeds"].to(device)
-    if seed is not None:
-        torch.manual_seed(seed)
-    return gen_arr(model, dec, style_text, gen_text, cfg, max_new, dec.shape[1] * 8, device)
+    return gen_from_style_batch(model, [style_img], [style_text], [gen_text], cfg, max_new,
+                                device, max_img_len=max_img_len, seed=seed)[0]
 
 
 @torch.no_grad()
@@ -276,7 +274,7 @@ def main():
                  cell(gt_arr, gt_label, CW, CH, highlight=True)]
         style_text_in = "" if args.no_style_text else ref["text"]
         for c in args.cfgs:
-            cells.append(cell(gen_arr(model, dec, style_text_in, target, c, args.max_new_tokens, spx, device),
+            cells.append(cell(gen_arr(model, dec, style_text_in, target, c, args.max_new_tokens, spx),
                               f"생성 cfg={c}{stext_tag}", CW, CH))
         row = np.hstack(cells)
         if row.shape[1] < full_w:

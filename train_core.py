@@ -44,7 +44,8 @@ def make_parser():
     p.add_argument("--vae-checkpoint", default="blowing-up-groundhogs/emuru_vae")
     p.add_argument("--jamo-text", action="store_true",
                    help="C1: 텍스트 조건을 NFD 자모로 분해해서 넣는다(겹받침 개선 실험). "
-                        "추론에서도 반드시 같은 설정이어야 하므로 ckpt 에 함께 저장된다.")
+                        "추론에서도 반드시 같은 설정이어야 하므로 ckpt 에 함께 저장된다. "
+                        "※ A/B 기각됨(docs/JONGSEONG_STROKE_LOSS.md 실험 1) — 재현용")
     p.add_argument("--reset-vae", action="store_true",
                    help="resume/pretrained 로드 시 ckpt 의 vae.* 키를 strip → --vae-checkpoint 로 준 새 VAE 유지. "
                         "한글적응 full VAE 교체 후 Eruku 재적응 시 필수(안 쓰면 ckpt 의 옛 VAE 가 덮어씀)")

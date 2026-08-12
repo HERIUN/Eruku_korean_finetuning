@@ -14,7 +14,6 @@ from PIL import Image, ImageDraw, ImageFont
 from models.origami import OrigamiNet
 from diffusers import AutoencoderKL
 from torch.nn.utils.rnn import pad_sequence
-from torchvision.transforms import Normalize
 import numpy as np
 import torch.nn as nn
 from typing import Tuple
@@ -28,30 +27,20 @@ _os.environ.setdefault("TORCH_NCCL_BLOCKING_WAIT", "1")
 _os.environ.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
 
 
-def _safe_int_from_maybe_tensor(value, fallback_min: int = 64) -> int:
-    """Convert a python int or 0-dim tensor (cpu/cuda) to int safely.
+def _len_at(value, idx: int) -> int:
+    """샘플 idx 의 길이(픽셀)를 int 로. int(전 샘플 공용) / list / 텐서 모두 받는다.
 
-    - Synchronizes CUDA before .item() to surface the true failing kernel site
-    - Moves to CPU before scalarization
-    - Falls back to a reasonable minimum on unexpected errors
+    ★ 조용한 fallback 을 두지 않는다: 여기서 길이를 잘못 집으면 style 이 잘린 채로
+      학습·생성이 멀쩡히 돌아가 버린다(docs/STYLE_LEN_BUG.md 가 딱 그 사고였다).
+      변환이 실패하면 그대로 터뜨려서 호출부를 고치게 한다.
     """
-    try:
-        if isinstance(value, torch.Tensor):
-            scalar_tensor = value
-            # Take the first element if tensor is not scalar
-            if scalar_tensor.dim() > 0:
-                scalar_tensor = scalar_tensor.reshape(-1)[0]
-            # Synchronize to attribute errors to the right op during debug
-            if scalar_tensor.is_cuda:
-                try:
-                    torch.cuda.synchronize(scalar_tensor.device)
-                except Exception:
-                    pass
-            return int(scalar_tensor.detach().to("cpu").item())
-        return int(value)
-    except Exception:
-        # As a last resort, return a conservative minimum width
-        return int(fallback_min)
+    if isinstance(value, int):
+        return value
+    el = value[idx] if hasattr(value, '__getitem__') else value
+    if isinstance(el, torch.Tensor):
+        return int(el.reshape(-1)[0].item()) if el.dim() > 0 else int(el.item())
+    return int(el)
+
 
 def pad_images(images, padding_value=1):
     images = [rearrange(img, 'c h w -> w c h') for img in images]
@@ -74,6 +63,8 @@ SPECIAL_TOKEN_COUNT = 3
 # 64 와 안 맞아 종성이 비선형으로 흩어짐). 그래서 모델은 "ㄺ 은 이렇게 그린다" 를 일반화하지
 # 못하고 음절을 통째로 외운다(실측: 음절단위 노출 β +0.152 vs 종성단위 노출 β −0.040).
 # NFD 로 분해하면 모든 ㄺ 음절이 U+11B0 을 공유하게 되어 종성이 공유 심볼이 된다.
+# ⚠️ 3k step A/B 에서 **기각**(겹받침 0.674 vs control 0.679 = 노이즈 1.5σ 이내, 격차도 안 줄어듦).
+#    병목이 텍스트 심볼 공유가 아니라 조밀한 글리프를 그리는 능력이었다. 재현용으로 남긴다.
 def to_jamo(text: str) -> str:
     """한글 완성형을 NFD 결합 자모로 분해. 한글 외(라틴·숫자·기호)는 그대로 통과."""
     return unicodedata.normalize("NFD", text)
@@ -92,9 +83,6 @@ class Emuru(torch.nn.Module):
         self.data_collator = HFDataCollector(tokenizer=self.tokenizer)
         self.t5_name_or_path = t5_checkpoint
 
-        self.padding_token = torch.tensor([[-0.4951,  0.8021,  0.3429,  0.5622,  0.5271,  0.5756,  0.7194,  0.6150]])
-        self.padding_token_threshold = 0.484982096850872
-
         config = T5Config.from_pretrained(t5_checkpoint)
         config.vocab_size = len(self.tokenizer)
         self.T5 = T5ForConditionalGeneration(config)
@@ -108,7 +96,6 @@ class Emuru(torch.nn.Module):
             # As a safe fallback, set attribute directly
             self.config._name_or_path = str(self.t5_name_or_path)
         self.T5.lm_head = torch.nn.Identity()
-        self.normalize = Normalize(0.5, 0.5)
         self.sos = torch.nn.Embedding(1, config.d_model)
         self.sog = torch.nn.Embedding(1, config.d_model)
         self.eog = torch.nn.Embedding(1, config.d_model)
@@ -137,11 +124,7 @@ class Emuru(torch.nn.Module):
         else:
             self.ocr = None
         
-        self.query_rearrange = Rearrange('b c h (w q) -> b w (q c h)', q=slices_per_query)
-        self.special_rearrange = torch.nn.Identity()
-        # self.special_rearrange = Rearrange('b w (h c) -> b w (h c)')
         self.z_rearrange = Rearrange('b w (q c h) -> b c h (w q)', c=channels, q=slices_per_query)
-        self.z_rearrange_eval = Rearrange('w b (q c h) -> b c h (w q)', c=channels, q=slices_per_query)
 
         self.mse_criterion = MSELoss()#(reduction='none') # TODO:change reductions if you intend to add a mask
         self.ce_criterion = CrossEntropyLoss()
@@ -179,9 +162,9 @@ class Emuru(torch.nn.Module):
     
     def _img_encode(self,img):
         # ★ 이중정규화 제거: 입력 img 는 이미 [-1,1] (dataset t_norm / infer style_tensor 모두
-        #   Normalize(0.5,0.5) 적용) = VAE 표준 입력범위. upstream 원본은 여기서 self.normalize 를
+        #   Normalize(0.5,0.5) 적용) = VAE 표준 입력범위. upstream 원본은 여기서 Normalize(0.5,0.5) 를
         #   한 번 더 적용해 [-3,1] 로 밀어 VAE 재구성이 ~3.4배 악화됐다(docs/STYLE_LEN_BUG.md).
-        #   실측: single(정상[-1,1]) 로 바꿔도 생성 붕괴 없음(MSE 소폭 개선) → 제거. (self.normalize=Identity 와 동일 효과)
+        #   실측: single(정상[-1,1]) 로 바꿔도 생성 붕괴 없음(MSE 소폭 개선) → 제거.
         # Ensure contiguous memory layout before encode to avoid kernel issues
         img = img.contiguous()
         return self.vae.encode(img.float()).latent_dist.sample()
@@ -205,12 +188,7 @@ class Emuru(torch.nn.Module):
         style_img_embeds = self._img_encode(style_img)
         
         for el in range(bs):
-            if isinstance(style_len, int):
-                sl = style_len
-            else:
-                # Safely get scalar style length
-                sl_tensor = style_len[el] if hasattr(style_len, '__getitem__') else style_len
-                sl = _safe_int_from_maybe_tensor(sl_tensor)
+            sl = _len_at(style_len, el)
 
             # Ensure widths are within bounds.
             # 원본 validate_widths 와 동일: style 은 max_img_len 의 절반까지만 차지하게 제한.
@@ -227,11 +205,7 @@ class Emuru(torch.nn.Module):
             specials_parts = [torch.ones(sl//8) * 2] # Img token
 
             if gen_img_embeds is not None and gen_len is not None:
-                if isinstance(gen_len, int):
-                    gl = gen_len
-                else:
-                    gl_tensor = gen_len[el] if hasattr(gen_len, '__getitem__') else gen_len
-                    gl = _safe_int_from_maybe_tensor(gl_tensor)
+                gl = _len_at(gen_len, el)
 
                 # 원본 validate_widths 와 동일: gen 은 style 을 뺀 남은 budget 까지만.
                 # (SOG+EOG 2 토큰 = 16px 예약). 이러면 끝의 truncation 이 gen 을 자를 일이 없음.
@@ -338,11 +312,9 @@ class Emuru(torch.nn.Module):
                          decoder_inputs_embeds=decoder_inputs_embeds)
         
         vae_latent = self.t5_to_vae(output.logits[:, :-1])
-        special_latent = self.t5_to_special(output.logits[:, :-1]) # [bs, w//8, 3]
+        special_pred = self.t5_to_special(output.logits[:, :-1]) # [bs, w//8, 3]
         pred_latent = self.z_rearrange(vae_latent)
-        special_pred = self.special_rearrange(special_latent)
 
-        
         ce_loss = ce_multiplier * self.ce_criterion(special_pred.flatten(0,1), specials.flatten(0,1))
 
         mse_mask = (specials == 2).unsqueeze(2) # [bs, w//8] TODO:consider putting the mask back in
@@ -490,11 +462,14 @@ class Emuru(torch.nn.Module):
                 prefix[el] = p
 
         if use_cfg:
+            if self.drop_img:
+                # 원본은 매 스텝 디코더 입력 '전체'를 uncond 로 갈아끼웠는데, KV 캐시 경로는
+                # prefix 를 한 번 넣고 이후엔 새 토큰만 넣으므로 그 치환을 재현할 수 없다.
+                # 이 repo 는 drop_img 를 켜지 않는다(항상 False) — 조용히 갈리느니 막는다.
+                raise NotImplementedError("generate_batch 는 drop_img=True + CFG 를 지원하지 않는다")
             enc_embeds = torch.cat([uncond_text_embeds, cond_text_embeds], dim=0)
             enc_mask = torch.cat([text_mask, text_mask], dim=0)
-            uncond_prefix = (torch.zeros_like(prefix) + self.uncond_embedding.weight
-                             if self.drop_img else prefix)
-            dec_in = torch.cat([uncond_prefix, prefix], dim=0)
+            dec_in = torch.cat([prefix, prefix], dim=0)
             cur_mask = None if dec_mask is None else torch.cat([dec_mask, dec_mask], dim=0)
         else:
             enc_embeds, enc_mask = cond_text_embeds, text_mask
@@ -609,7 +584,8 @@ class Emuru(torch.nn.Module):
         path.mkdir(parents=True, exist_ok=True)
         torch.save(self.T5.state_dict(), path / 'T5.pth')
         torch.save(self.vae.state_dict(), path / 'VAE.pth')
-        torch.save(self.ocr.state_dict(), path / 'OCR.pth')
+        if self.ocr is not None:   # ocr_checkpoint 없이 만들면 OCR 모듈 자체가 없다(기본값)
+            torch.save(self.ocr.state_dict(), path / 'OCR.pth')
         torch.save(self.query_emb.state_dict(), path / 'query_emb.pth')
         torch.save(self.sos.state_dict(), path / 'sos.pth')
 
@@ -617,7 +593,8 @@ class Emuru(torch.nn.Module):
         path = Path(path)
         self.T5.load_state_dict(torch.load(path / 'T5.pth'))
         self.vae.load_state_dict(torch.load(path / 'VAE.pth'))
-        self.ocr.load_state_dict(torch.load(path / 'OCR.pth'))
+        if self.ocr is not None:
+            self.ocr.load_state_dict(torch.load(path / 'OCR.pth'))
         self.query_emb.load_state_dict(torch.load(path / 'query_emb.pth'))
         self.sos.load_state_dict(torch.load(path / 'sos.pth'))
 
@@ -660,8 +637,8 @@ class DDPCompatibleEmuru(Emuru):
             return super().continue_gen_test(
                 batch_data['gt'],
                 batch_data['batch'],
-                batch_data.get('cfg_scale', 1.0),
-                batch_data.get('max_new_tokens', 64)
+                max_new_tokens=batch_data.get('max_new_tokens', 64),
+                cfg_scale=batch_data.get('cfg_scale', 1.0),
             )
         else:
             raise ValueError(f"Unknown mode: {mode}")
