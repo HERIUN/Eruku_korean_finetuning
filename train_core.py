@@ -42,6 +42,9 @@ def make_parser():
     p.add_argument("--lines-json", default=None, help="offline lines_json (online-split 시 불필요)")
     p.add_argument("--out", default="finetune_runs/korean")
     p.add_argument("--vae-checkpoint", default="blowing-up-groundhogs/emuru_vae")
+    p.add_argument("--jamo-text", action="store_true",
+                   help="C1: 텍스트 조건을 NFD 자모로 분해해서 넣는다(겹받침 개선 실험). "
+                        "추론에서도 반드시 같은 설정이어야 하므로 ckpt 에 함께 저장된다.")
     p.add_argument("--reset-vae", action="store_true",
                    help="resume/pretrained 로드 시 ckpt 의 vae.* 키를 strip → --vae-checkpoint 로 준 새 VAE 유지. "
                         "한글적응 full VAE 교체 후 Eruku 재적응 시 필수(안 쓰면 ckpt 의 옛 VAE 가 덮어씀)")
@@ -276,6 +279,8 @@ def train(args):
         ocr_checkpoint=args.ocr_checkpoint,
     ).to(device)
     model.alpha = 1.0  # ocr_loss off
+    model.jamo_text = args.jamo_text
+    print(f"jamo-text(C1): {model.jamo_text}")
     # text-dropout 켜서 CFG 가능하게 (원본 Emuru 레시피). 이게 없으면 generate() 의
     # CFG 가 no-op (uncond==cond) 이라 inference 에서 텍스트를 강하게 못 따라감.
     model.dropout_probability = args.text_dropout
@@ -592,7 +597,9 @@ def train(args):
                 _run_val(step)
 
             if args.save_every > 0 and step % args.save_every == 0:
-                ckpt = {"model": model.state_dict(), "optimizer": optimizer.state_dict(), "step": step}
+                # jamo_text 는 추론에서 같은 값으로 켜야 하므로 ckpt 에 같이 남긴다
+                ckpt = {"model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                        "step": step, "jamo_text": args.jamo_text}
                 p = out_dir / f"checkpoint_step_{step:06d}.pth"
                 torch.save(ckpt, p)
                 print(f"  saved {p}")
@@ -600,7 +607,7 @@ def train(args):
     if args.val_every > 0 and step % args.val_every != 0:
         _run_val(step)   # 종료 시 마지막 val (직전 step에서 이미 했으면 중복 방지)
     final = out_dir / "checkpoint_last.pth"
-    torch.save({"model": model.state_dict(), "step": step}, final)
+    torch.save({"model": model.state_dict(), "step": step, "jamo_text": args.jamo_text}, final)
     loss_f.close()
     if val_f is not None:
         val_f.close()

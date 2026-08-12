@@ -1,3 +1,5 @@
+import unicodedata
+
 import torch
 import os as _os
 from transformers import AutoTokenizer
@@ -62,6 +64,21 @@ def pad_images(images, padding_value=1):
 # sog, eog, img
 SPECIAL_TOKEN_COUNT = 3
 
+
+# ─────────────────────────────────────────────────────────────────────────────
+# C1: 자모 분해 텍스트 조건 (docs/JONGSEONG_STROKE_LOSS.md)
+# ─────────────────────────────────────────────────────────────────────────────
+# 텍스트 조건은 byT5 = UTF-8 **바이트** 다. 한글 완성형(3바이트)은 종성 구조를 바이트로
+# 드러내지 않는다 — 같은 ㄺ 받침을 쓰는 닭 eb8bad / 읽 ec9dbd / 맑 eba791 이 바이트를
+# 하나도 공유하지 않는다(코드 = 0xAC00 + 초성·588 + 중성·28 + 종성 인데 28 이 바이트 경계
+# 64 와 안 맞아 종성이 비선형으로 흩어짐). 그래서 모델은 "ㄺ 은 이렇게 그린다" 를 일반화하지
+# 못하고 음절을 통째로 외운다(실측: 음절단위 노출 β +0.152 vs 종성단위 노출 β −0.040).
+# NFD 로 분해하면 모든 ㄺ 음절이 U+11B0 을 공유하게 되어 종성이 공유 심볼이 된다.
+def to_jamo(text: str) -> str:
+    """한글 완성형을 NFD 결합 자모로 분해. 한글 외(라틴·숫자·기호)는 그대로 통과."""
+    return unicodedata.normalize("NFD", text)
+
+
 class Emuru(torch.nn.Module):
     def __init__(self, t5_checkpoint='google-t5/t5-base',
                  vae_checkpoint='blowing-up-groundhogs/emuru_vae',
@@ -69,6 +86,9 @@ class Emuru(torch.nn.Module):
         super(Emuru, self).__init__()
         self.tokenizer = AutoTokenizer.from_pretrained('google/byt5-small')  # per-character tokenizer
         self.tokenizer.add_tokens(["<sog>"])
+        # C1: True 면 텍스트 조건을 자모 분해해서 넣는다. **학습과 추론이 반드시 같아야**
+        # 하므로 두 경로 모두 _encode_text() 하나만 쓴다.
+        self.jamo_text = False
         self.data_collator = HFDataCollector(tokenizer=self.tokenizer)
         self.t5_name_or_path = t5_checkpoint
 
@@ -263,9 +283,11 @@ class Emuru(torch.nn.Module):
     def _encode_text(self, style_text, gen_text):
         """style/gen 텍스트 → (input_ids, attention_mask). 학습·추론 공용 진입점.
 
-        여기 한 곳만 거치게 해서 텍스트 전처리가 두 경로에서 갈리지 않게 한다.
+        여기 한 곳만 거치게 해서 자모 분해 적용 여부가 두 경로에서 갈리지 않게 한다.
         """
         pairs = [f"{style}<sog>{gen}" for style, gen in zip(style_text, gen_text)]
+        if self.jamo_text:
+            pairs = [to_jamo(el) for el in pairs]
         enc = self.tokenizer(pairs, padding=True, return_tensors="pt")
         return enc["input_ids"], enc["attention_mask"]
 

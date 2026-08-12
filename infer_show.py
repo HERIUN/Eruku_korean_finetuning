@@ -174,6 +174,10 @@ def load_model(ckpt, device, vae_checkpoint=None):
         print(f"[load_model] vae swapped -> {vae_ck} (ckpt vae.* {n_before - len(st)}키 strip)")
     model.load_state_dict(st, strict=False)
     model.drop_text = True
+    # C1(자모 분해 텍스트 조건)은 학습과 추론이 같아야 한다 → ckpt 에 기록된 값을 그대로 따른다.
+    model.jamo_text = bool(ck.get("jamo_text", False))
+    if model.jamo_text:
+        print("[load_model] jamo-text(C1) ON — 텍스트 조건을 NFD 자모로 분해해 넣는다")
     step = ck.get("step", "?"); del ck, st
     model.eval()
     return model, step
