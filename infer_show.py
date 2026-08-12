@@ -87,22 +87,29 @@ def load_style(path, h=64):
     return style_tensor(np.array(Image.open(path).convert("RGB")), h)
 
 
+def crop_gen(img, special, style_px):
+    """생성물([c,h,w] [-1,1])에서 gen 영역만 잘라 uint8 [H,W].
+
+    깨끗한 gen 영역만 자르기: 고정 style_px 로 자르면 모델이 마저 그린 style 텍스트 echo 가
+    남는다. generate 가 돌려주는 special_sequence (3=style img, 2=image, 0=SOG, 1=EOG)
+    에서 SOG 위치가 style(+echo)→gen 의 진짜 경계 (continue_gen_test 참고).
+    SOG 는 latent '한 열'(=8px) 이므로 그 열 전체를 넘겨야 한다(+1 이면 7px 이 남는다).
+    """
+    sog = (special == 0).nonzero().flatten()            # latent 열 인덱스
+    if len(sog) > 0:
+        start = (int(sog[0].item()) + 1) * 8           # 첫 SOG 열 '다음'부터 = gen 텍스트
+        g = img[:, :, start:] if img.shape[-1] > start else img[:, :, -8:]
+    else:
+        g = img[:, :, style_px:] if img.shape[-1] > style_px else img
+    return np.array(torchvision.transforms.ToPILImage()(
+        ((g + 1) / 2).clamp(0, 1).cpu()).convert("L"))
+
+
 def gen_arr(model, dec, ref_text, seed_text, cfg, max_new, style_px, device):
     with torch.no_grad():
         img, special = model.generate(decoder_inputs_embeds_vae=dec, style_text=[ref_text],
                                       gen_text=[seed_text], cfg_scale=cfg, max_new_tokens=max_new)
-    # 깨끗한 gen 영역만 자르기: 고정 style_px 로 자르면 모델이 마저 그린 style 텍스트 echo 가
-    # 남는다. generate 가 돌려주는 special_sequence (3=style img, 2=image, 0=SOG, 1=EOG)
-    # 에서 SOG 위치가 style(+echo)→gen 의 진짜 경계 (continue_gen_test 참고).
-    # SOG 는 latent '한 열'(=8px) 이므로 그 열 전체를 넘겨야 한다(+1 이면 7px 이 남는다).
-    sog = (special == 0).nonzero().flatten()            # latent 열 인덱스
-    if len(sog) > 0:
-        start = (int(sog[0].item()) + 1) * 8           # 첫 SOG 열 '다음'부터 = gen 텍스트
-        g = img[:, :, :, start:] if img.shape[-1] > start else img[:, :, :, -8:]
-    else:
-        g = img[:, :, :, style_px:] if img.shape[-1] > style_px else img
-    return np.array(torchvision.transforms.ToPILImage()(
-        ((g[0] + 1) / 2).clamp(0, 1).cpu()).convert("L"))
+    return crop_gen(img[0], special, style_px)
 
 
 @torch.no_grad()
@@ -124,6 +131,27 @@ def gen_from_style(model, style_img, style_text, gen_text, cfg, max_new, device,
     if seed is not None:
         torch.manual_seed(seed)
     return gen_arr(model, dec, style_text, gen_text, cfg, max_new, dec.shape[1] * 8, device)
+
+
+@torch.no_grad()
+def gen_from_style_batch(model, style_imgs, style_texts, gen_texts, cfg, max_new, device,
+                         max_img_len=2048, seed=None):
+    """gen_from_style 의 배치판 — style 텐서 list → 생성 라인이미지 list([H,W] uint8).
+
+    자기회귀 스텝을 배치 전체가 공유하므로 샘플당 비용이 크게 준다. 다만 스텝 수는
+    '가장 늦게 EOG 를 내는 샘플'에 맞춰지니, 길이가 비슷한 것끼리 묶을수록 이득이 크다.
+    """
+    style_imgs = [(el[0] if el.dim() == 4 else el).to(device) for el in style_imgs]
+    mi = model.get_model_inputs(style_imgs, None,
+                                style_len=[el.shape[-1] for el in style_imgs],
+                                gen_len=None, max_img_len=max_img_len)
+    dec = mi["decoder_inputs_embeds"].to(device)
+    lens = mi["lengths"]                     # 패딩 제외한 샘플별 실제 prefix 길이
+    if seed is not None:
+        torch.manual_seed(seed)
+    imgs, specials = model.generate_batch(dec, style_texts, gen_texts, cfg_scale=cfg,
+                                          max_new_tokens=max_new, prefix_lens=lens)
+    return [crop_gen(im, sp, int(el) * 8) for im, sp, el in zip(imgs, specials, lens)]
 
 
 def load_model(ckpt, device, vae_checkpoint=None):

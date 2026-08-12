@@ -17,8 +17,11 @@ import numpy as np
 import torch.nn as nn
 from typing import Tuple
 
-# Safer defaults for clearer NCCL/CUDA error reporting during debugging
-_os.environ.setdefault("CUDA_LAUNCH_BLOCKING", "1")
+# Safer defaults for clearer NCCL error reporting during debugging
+# ★ CUDA_LAUNCH_BLOCKING 은 여기서 강제하지 않는다: 커널 런치를 동기화해 CUDA 에러를
+#   진짜 발생 지점에 붙여주지만, 자기회귀 생성처럼 작은 커널이 많은 경로가 1.5~1.8배
+#   느려진다(실측: 배치 생성 8샘플 2.4s → 4.4s). 디버깅할 때만 밖에서 켤 것 —
+#   `CUDA_LAUNCH_BLOCKING=1 python ...`
 _os.environ.setdefault("TORCH_NCCL_BLOCKING_WAIT", "1")
 _os.environ.setdefault("TORCH_NCCL_ASYNC_ERROR_HANDLING", "1")
 
@@ -168,6 +171,7 @@ class Emuru(torch.nn.Module):
         bs = len(style_img)
         decoder_inputs_embeds_list = []
         specials_list = []
+        lengths_list = []
         
         # Move images to device and pad them
         style_img = pad_images([el.to(self.T5.device) for el in style_img])
@@ -231,6 +235,7 @@ class Emuru(torch.nn.Module):
             sample_embeds = rearrange(sample_embeds, 'c h w -> w (h c)', h=h_dim, c=1)
 
             decoder_inputs_embeds_list.append(sample_embeds)
+            lengths_list.append(sample_embeds.size(0))
 
             sample_specials = torch.cat(specials_parts, dim=0).to(self.T5.device)
             specials_list.append(sample_specials)
@@ -238,25 +243,38 @@ class Emuru(torch.nn.Module):
         # Pad sequences and ensure consistent shapes
         decoder_inputs_embeds_padded = pad_sequence(decoder_inputs_embeds_list, padding_value=1, batch_first=True)
         specials_padded = pad_sequence(specials_list, padding_value=1, batch_first=True)
-        
+
         # Ensure we don't exceed max_img_len
         max_seq_len = max_img_len // 8
         if decoder_inputs_embeds_padded.size(1) > max_seq_len:
             decoder_inputs_embeds_padded = decoder_inputs_embeds_padded[:, :max_seq_len]
         if specials_padded.size(1) > max_seq_len:
             specials_padded = specials_padded[:, :max_seq_len]
-        
+
         return {
             'decoder_inputs_embeds': decoder_inputs_embeds_padded,
             'specials': specials_padded.long(),
+            # 샘플별 '실제' 길이(패딩 제외, latent 열 단위). 배치 생성에서
+            # generate_batch(prefix_lens=...) 로 넘겨야 패딩을 style 로 먹지 않는다.
+            'lengths': torch.tensor([min(el, max_seq_len) for el in lengths_list],
+                                    dtype=torch.long, device=self.T5.device),
         }
+
+    def _encode_text(self, style_text, gen_text):
+        """style/gen 텍스트 → (input_ids, attention_mask). 학습·추론 공용 진입점.
+
+        여기 한 곳만 거치게 해서 텍스트 전처리가 두 경로에서 갈리지 않게 한다.
+        """
+        pairs = [f"{style}<sog>{gen}" for style, gen in zip(style_text, gen_text)]
+        enc = self.tokenizer(pairs, padding=True, return_tensors="pt")
+        return enc["input_ids"], enc["attention_mask"]
 
     def forward(self, decoder_inputs_embeds_vae, specials, style_text, gen_text, ce_multiplier=1.0):
         # style_img_embeds: [bs, w//8, 8, 1]
         # generate text embeddings
         
         with torch.no_grad():
-            encoded_text = self.tokenizer([f"{style}<sog>{gen}" for style, gen in zip(style_text, gen_text)], padding=True, return_tensors="pt")
+            text_ids, text_am = self._encode_text(style_text, gen_text)
         
         # add special tokens to img
         sos = repeat(self.sos.weight, '1 d -> b 1 d', b=decoder_inputs_embeds_vae.size(0))
@@ -287,14 +305,15 @@ class Emuru(torch.nn.Module):
             ], dim = 1,
         )
 
-        inputs_embeds = self.T5.shared(encoded_text['input_ids'].to(self.T5.device))
+        inputs_embeds = self.T5.shared(text_ids.to(self.T5.device))
         drop_ids = torch.rand(inputs_embeds.shape[0], device=inputs_embeds.device) < self.dropout_probability
         if self.drop_text:
             inputs_embeds = torch.where(drop_ids[:, None, None], self.uncond_embedding.weight, inputs_embeds)
         if self.drop_img:
             decoder_inputs_embeds = torch.where(drop_ids[:, None, None], self.uncond_embedding.weight, decoder_inputs_embeds)
         
-        output = self.T5(inputs_embeds=inputs_embeds, attention_mask=encoded_text['attention_mask'].to(self.T5.device), decoder_inputs_embeds=decoder_inputs_embeds)
+        output = self.T5(inputs_embeds=inputs_embeds, attention_mask=text_am.to(self.T5.device),
+                         decoder_inputs_embeds=decoder_inputs_embeds)
         
         vae_latent = self.t5_to_vae(output.logits[:, :-1])
         special_latent = self.t5_to_special(output.logits[:, :-1]) # [bs, w//8, 3]
@@ -374,79 +393,159 @@ class Emuru(torch.nn.Module):
         return new_image
     
     @torch.inference_mode()
-    def generate(self, decoder_inputs_embeds_vae, style_text, gen_text, cfg_scale=1.0, max_new_tokens=64, min_gen_tokens=0):
-        """
-        call this with bs=1 please
-        min_gen_tokens: 이 토큰 수 전까지는 EOG(종료) 예측을 억제 (조기종료 방지 테스트용)
-        """
-        encoded_text = self.tokenizer([f"{style}<sog>{gen}" for style, gen in zip(style_text,gen_text)], padding=True, return_tensors="pt")
-        text_input_ids = encoded_text['input_ids'].to(self.T5.device)
-        text_mask = encoded_text['attention_mask'].to(self.T5.device)
+    def generate_batch(self, decoder_inputs_embeds_vae, style_text, gen_text, cfg_scale=1.0,
+                       max_new_tokens=64, min_gen_tokens=0, prefix_lens=None):
+        """배치 + KV 캐시 자기회귀 생성.
 
-        sog = repeat(self.sog.weight, '1 d -> b 1 d', b=1)
-        sos = repeat(self.sos.weight, '1 d -> b 1 d', b=1)
-        z_sequence = [decoder_inputs_embeds_vae]
-        special_sequence = torch.ones(decoder_inputs_embeds_vae.size(1))*3
-        if len(z_sequence) == 0:
-            decoder_inputs_embeds = sos
+        원본 구현은 매 토큰마다 (a) T5 encoder 를 텍스트에 다시 돌리고 (b) 디코더를
+        prefix 전체에 다시 돌렸다 — 스텝당 O(n), 전체 O(n²). 여기선 encoder 출력과
+        decoder KV 를 캐시해 스텝당 새 토큰 1개만 계산한다(수치적으로 동일, fp 오차 ~1e-7).
+        cfg_scale != 1.0 일 때도 uncond/cond 를 [2b] 한 배치로 합쳐 forward 1회로 처리.
+
+        Args:
+            decoder_inputs_embeds_vae: [b, w, 8] style prefix latent (get_model_inputs 출력)
+            prefix_lens: 샘플별 prefix 의 '실제' latent 길이. get_model_inputs 는 배치
+                최대폭으로 오른쪽 패딩하므로 이걸 안 주면 패딩까지 style 로 먹는다.
+                (여기선 좌측 패딩으로 다시 정렬 — T5 는 상대위치라 안전)
+            min_gen_tokens: 이 토큰 수 전까지는 EOG(종료) 예측을 억제 (조기종료 방지 테스트용)
+
+        Returns:
+            (imgs, specials) — imgs[i]=[c,h,w] 라인이미지([-1,1]),
+            specials[i]=1-D (3=style img, 2=image, 0=SOG, 1=EOG). 샘플마다 길이가 다르다.
+        """
+        device = self.T5.device
+        z = decoder_inputs_embeds_vae.to(device)
+        if z.dim() == 2:
+            z = z.unsqueeze(0)
+        bs, max_w = z.size(0), z.size(1)
+        if prefix_lens is None:
+            lens = [max_w] * bs
         else:
-            decoder_inputs_embeds = self.query_emb(torch.cat(z_sequence, dim=1))
-            if len(style_text[0]) != 0:
-                decoder_inputs_embeds = torch.cat([sos, decoder_inputs_embeds], dim=1)
-            else:
-                decoder_inputs_embeds = torch.cat([sos, decoder_inputs_embeds, sog], dim=1)
-                vae_latent = self.t5_to_vae(sog)
-                special_sequence = torch.cat([special_sequence, torch.zeros(1)])
-                z_sequence.append(vae_latent)
+            if isinstance(prefix_lens, torch.Tensor):
+                prefix_lens = prefix_lens.tolist()
+            lens = [max(1, min(int(el), max_w)) for el in prefix_lens]
 
+        # 텍스트 인코딩 — 루프 밖에서 한 번만 (원본은 매 토큰 encoder 재계산)
+        _ids, _am = self._encode_text(style_text, gen_text)
+        text_input_ids = _ids.to(device)
+        text_mask = _am.to(device)
+
+        use_cfg = cfg_scale != 1.0
+        cond_text_embeds = self.T5.shared(text_input_ids)
+        if use_cfg and self.drop_text:
+            uncond_text_embeds = torch.zeros_like(cond_text_embeds) + self.uncond_embedding.weight
+        else:
+            uncond_text_embeds = cond_text_embeds
+
+        # --- decoder prefix: sos + query_emb(style latent) [+ sog], 샘플별 길이가 달라 좌측 패딩 ---
+        sos, sog = self.sos.weight[0], self.sog.weight[0]
+        emb = self.query_emb(z)
+        prefix_parts, spec_head, z_head = [], [], []
+        for el in range(bs):
+            parts = [sos[None], emb[el, :lens[el]]]
+            specs = [torch.full((lens[el],), 3.0, device=device)]
+            zs = [z[el, :lens[el]]]
+            if len(style_text[el]) == 0:
+                # 원본과 동일: style 텍스트가 없으면 style→gen 경계 SOG 를 미리 넣어준다
+                parts.append(sog[None])
+                specs.append(torch.zeros(1, device=device))
+                zs.append(self.t5_to_vae(sog[None]))
+            prefix_parts.append(torch.cat(parts, dim=0))
+            spec_head.append(torch.cat(specs))
+            z_head.append(torch.cat(zs, dim=0))
+
+        plens = [p.size(0) for p in prefix_parts]
+        pmax, d_model = max(plens), prefix_parts[0].size(-1)
+        prefix = emb.new_zeros(bs, pmax, d_model)
+        if any(pl != pmax for pl in plens):
+            dec_mask = torch.zeros(bs, pmax, dtype=torch.long, device=device)
+            for el, p in enumerate(prefix_parts):
+                prefix[el, pmax - plens[el]:] = p
+                dec_mask[el, pmax - plens[el]:] = 1
+        else:
+            dec_mask = None                                  # 패딩이 없으면 마스크 불필요
+            for el, p in enumerate(prefix_parts):
+                prefix[el] = p
+
+        if use_cfg:
+            enc_embeds = torch.cat([uncond_text_embeds, cond_text_embeds], dim=0)
+            enc_mask = torch.cat([text_mask, text_mask], dim=0)
+            uncond_prefix = (torch.zeros_like(prefix) + self.uncond_embedding.weight
+                             if self.drop_img else prefix)
+            dec_in = torch.cat([uncond_prefix, prefix], dim=0)
+            cur_mask = None if dec_mask is None else torch.cat([dec_mask, dec_mask], dim=0)
+        else:
+            enc_embeds, enc_mask = cond_text_embeds, text_mask
+            dec_in, cur_mask = prefix, dec_mask
+
+        encoder_outputs = self.T5.get_encoder()(inputs_embeds=enc_embeds, attention_mask=enc_mask)
+
+        past, step_lat, step_spec = None, [], []
+        finished = torch.zeros(bs, dtype=torch.bool, device=device)
         for i in range(max_new_tokens):
-            if cfg_scale != 1.0:
-                conditional_text_embeds = self.T5.shared(text_input_ids)
-                if self.drop_text:
-                    unconditional_text_embeds = torch.zeros_like(conditional_text_embeds).to(self.T5.device) + self.uncond_embedding.weight
-                else:
-                    unconditional_text_embeds = conditional_text_embeds
-
-                if self.drop_img:
-                    unconditional_decoder_inputs_embeds = torch.zeros_like(decoder_inputs_embeds).to(self.T5.device) + self.uncond_embedding.weight
-                else:
-                    unconditional_decoder_inputs_embeds = decoder_inputs_embeds
-
-                output_unconditional = self.T5(inputs_embeds=unconditional_text_embeds, attention_mask=text_mask, decoder_inputs_embeds=unconditional_decoder_inputs_embeds).logits[:, -1:]
-                output_conditional = self.T5(input_ids=text_input_ids, attention_mask=text_mask, decoder_inputs_embeds=decoder_inputs_embeds).logits[:, -1:]
-                output = output_unconditional + (output_conditional - output_unconditional) * cfg_scale
-            else:
-                output = self.T5(input_ids=text_input_ids, attention_mask=text_mask, decoder_inputs_embeds=decoder_inputs_embeds).logits[:, -1:]
+            out = self.T5(encoder_outputs=encoder_outputs, attention_mask=enc_mask,
+                          decoder_inputs_embeds=dec_in, decoder_attention_mask=cur_mask,
+                          past_key_values=past, use_cache=True)
+            past = out.past_key_values
+            output = out.logits[:, -1:]
+            if use_cfg:
+                uncond, cond = output[:bs], output[bs:]
+                output = uncond + (cond - uncond) * cfg_scale
 
             special_prediction = self.t5_to_special(output)
-
             if i < min_gen_tokens:
                 # 조기종료 방지: 일정 길이 전까지 EOG(index 1) 예측 억제
                 special_prediction = special_prediction.clone()
                 special_prediction[..., 1] = -1e9
+            choice = special_prediction.argmax(dim=-1)[:, 0]         # [bs] 0=SOG 1=EOG 2=img
 
-            if torch.argmax(special_prediction, dim=-1) == 0:
-                decoder_inputs_embeds = torch.cat([decoder_inputs_embeds, sog], dim=1)
-                vae_latent = self.t5_to_vae(output)
-                special_sequence = torch.cat([special_sequence, torch.zeros(1)])
-            elif torch.argmax(special_prediction, dim=-1) == 1:
-                special_sequence = torch.cat([special_sequence, torch.ones(1)])
-                vae_latent = self.t5_to_vae(output)
-                z_sequence.append(vae_latent)
+            vae_latent = self.t5_to_vae(output)                      # [bs, 1, 8]
+            step_lat.append(vae_latent)
+            step_spec.append(choice)
+            finished |= (choice == 1)
+            if bool(finished.all()):
                 break
-            else:
-                vae_latent = self.t5_to_vae(output)
-                decoder_inputs_embeds = torch.cat([decoder_inputs_embeds, self.query_emb(vae_latent)], dim=1)
-                special_sequence = torch.cat([special_sequence, torch.ones(1)*2])
-            z_sequence.append(vae_latent)
-            
-            
-        z_sequence = [el.to(self.vae.device) for el in z_sequence]
-        
-        z_sequence = torch.cat(z_sequence, dim=1)
-        img = torch.clamp(self.vae.decode(self.z_rearrange(z_sequence)).sample, -1, 1)
-        return img, special_sequence.to(self.T5.device)
-        
+
+            # SOG 를 뽑았으면 다음 입력은 sog 임베딩, 아니면 방금 뽑은 latent (원본과 동일)
+            nxt = torch.where((choice == 0)[:, None, None],
+                              sog.view(1, 1, -1).expand(bs, 1, d_model),
+                              self.query_emb(vae_latent))
+            dec_in = torch.cat([nxt, nxt], dim=0) if use_cfg else nxt
+            if cur_mask is not None:
+                ones = torch.ones(cur_mask.size(0), 1, dtype=cur_mask.dtype, device=device)
+                cur_mask = torch.cat([cur_mask, ones], dim=1)
+
+        if step_lat:
+            lats = torch.cat(step_lat, dim=1)                        # [bs, t, 8]
+            specs = torch.stack(step_spec, dim=1)                    # [bs, t]
+        else:                                                        # max_new_tokens=0 → prefix 만 디코드
+            lats = z.new_zeros(bs, 0, z.size(-1))
+            specs = torch.zeros(bs, 0, dtype=torch.long, device=device)
+        imgs, specials = [], []
+        for el in range(bs):
+            eog = (specs[el] == 1).nonzero().flatten()
+            n = int(eog[0].item()) + 1 if len(eog) else specs.size(1)   # EOG 토큰까지 포함
+            z_seq = torch.cat([z_head[el], lats[el, :n]], dim=0)[None].to(self.vae.device)
+            img = torch.clamp(self.vae.decode(self.z_rearrange(z_seq)).sample, -1, 1)
+            imgs.append(img[0])
+            specials.append(torch.cat([spec_head[el], specs[el, :n].to(spec_head[el].dtype)]))
+        return imgs, specials
+
+    @torch.inference_mode()
+    def generate(self, decoder_inputs_embeds_vae, style_text, gen_text, cfg_scale=1.0, max_new_tokens=64, min_gen_tokens=0):
+        """단일 샘플 생성. 배치는 generate_batch() 를 쓸 것.
+
+        min_gen_tokens: 이 토큰 수 전까지는 EOG(종료) 예측을 억제 (조기종료 방지 테스트용)
+        """
+        if decoder_inputs_embeds_vae.dim() == 3 and decoder_inputs_embeds_vae.size(0) != 1:
+            raise ValueError(f"generate() 는 bs=1 전용 (받은 bs={decoder_inputs_embeds_vae.size(0)}) "
+                             "— 배치는 generate_batch() 를 쓸 것")
+        imgs, specials = self.generate_batch(decoder_inputs_embeds_vae, style_text, gen_text,
+                                             cfg_scale=cfg_scale, max_new_tokens=max_new_tokens,
+                                             min_gen_tokens=min_gen_tokens)
+        return imgs[0][None], specials[0]
+
+
     @torch.no_grad()
     def continue_gen_test(self, gt, batch, max_new_tokens=64, cfg_scale=1.0):
         gt = gt[:1]

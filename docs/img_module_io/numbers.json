@@ -1,0 +1,126 @@
+{
+  "ckpt": "/data/work/dgkang/Eruku_korean_finetuning/finetune_runs/korean_en2ko_fixed/checkpoint_step_014000.pth",
+  "max_img_len": 2048,
+  "batch": [
+    {
+      "style_text": "혐의(특경가법상 부괜 252.57",
+      "gen_text": "곳 Pierro… 껄",
+      "style_img_shape": [
+        3,
+        64,
+        673
+      ],
+      "gen_img_shape": [
+        3,
+        64,
+        379
+      ],
+      "style_img_len": 673,
+      "gen_img_len": 379
+    },
+    {
+      "style_text": "messaline! 쌍! 21:17 rejigger",
+      "gen_text": "761,700 정이다. [토양환경] / ‘설정한’",
+      "style_img_shape": [
+        3,
+        64,
+        769
+      ],
+      "gen_img_shape": [
+        3,
+        64,
+        966
+      ],
+      "style_img_len": 769,
+      "gen_img_len": 966
+    },
+    {
+      "style_text": "(해외체류) 신고했다.… %",
+      "gen_text": "뭘; = 턱을 봔 incantator 찡 $ resinoid =",
+      "style_img_shape": [
+        3,
+        64,
+        573
+      ],
+      "gen_img_shape": [
+        3,
+        64,
+        892
+      ],
+      "style_img_len": 573,
+      "gen_img_len": 892
+    }
+  ],
+  "padded_style_shape": [
+    3,
+    3,
+    64,
+    769
+  ],
+  "step": 14000,
+  "decoder_inputs_embeds_shape": [
+    3,
+    218,
+    8
+  ],
+  "specials_shape": [
+    3,
+    218
+  ],
+  "lengths": [
+    133,
+    218,
+    184
+  ],
+  "sample0": {
+    "seq_len_latent": 133,
+    "seq_len_px": 1064,
+    "sog_at": 84,
+    "n_img_tokens": 131,
+    "gen_cols": [
+      85,
+      132
+    ]
+  },
+  "losses": {
+    "loss": 0.037336453795433044,
+    "mse_loss": 0.03718367964029312,
+    "ce_loss": 0.00015277460624929518,
+    "ocr_loss": 0.0
+  },
+  "mse_detail": {
+    "cols_total": 654,
+    "cols_img(specials==2)": 529,
+    "cols_sog(0)": 3,
+    "cols_eog_or_pad(1)": 122,
+    "sample0_style_cols_labeled_img": 84,
+    "sample0_style_cols_total": 84,
+    "pad_label_is_eog": true,
+    "mse_as_coded(전체 평균)": 0.03718367964029312,
+    "mse_if_divided_by_img_only": 0.045969992876052856,
+    "img_element_ratio": 0.808868501529052
+  },
+  "vae_roundtrip": {
+    "compare_px": 376,
+    "mse_orig_vs_gt(학습경로=패딩 encode)": 0.015855755656957626,
+    "mse_orig_vs_unpadded(패딩 없이 단독 encode)": 0.0017147799953818321,
+    "mse_gt_vs_pred": 0.012330876663327217,
+    "pad_width_sweep(mode)": {
+      "379": 0.0017147799953818321,
+      "500": 0.004541721194982529,
+      "700": 0.009533009491860867,
+      "966": 0.01583261415362358,
+      "1400": 0.02285493165254593
+    },
+    "sample_vs_mode_at_unpadded": {
+      "mode": 0.0017147799953818321,
+      "sample": 0.001750419964082539
+    },
+    "note": "패딩 폭이 넓을수록 같은 이미지의 재구성이 나빠진다. sample()/mode() 차이는 무시할 수준."
+  },
+  "generate": {
+    "cfg": 2.0,
+    "prefix_latent": 84,
+    "out_px": 344
+  }
+}

@@ -192,6 +192,10 @@ style 텍스트와 gen(target) 텍스트를 **각각 독립적으로**, 아래 �
   forward 에서 EOG embedding 치환 + CE 로 "gen 종료 후엔 EOG 만" 학습
 
 ### 📄 파이프라인 상세 문서 & 알려진 이슈 (`docs/`)
+- **`docs/MODULE_IO.md`** — 🧩 **학습 모듈 I/O 총정리**: 배치 dict 6개 키(무엇을 넣어야 하나),
+  `style_len`/`gen_len` 이 왜 이미지에서 못 얻는 값인지, 텍스트가 T5 encoder 로 들어가는 경로,
+  `forward`(loss+pred_latent) / `generate`(라인 이미지) 출력까지 **실제 생성 이미지**로 설명.
+  - 재현: `CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. .venv/bin/python docs/_gen_module_io.py`
 - **`docs/DATA_GENERATION.md`** — 원본 `OnlineSplitFontSquare` 데이터 생성 전체 흐름(코드 단위).
 - **`docs/PIPELINE_STEP_BY_STEP.md`** — 렌더→증강→split 을 단계별 이미지로 시각화.
   긴 텍스트에서 ①회전(`expand=False`)이 양끝을 잘라내고 ②warp 가 split cut 을 글자로 밀어넣는
@@ -240,6 +244,14 @@ style 참조 이미지의 전사 텍스트. `f"{style_text}<sog>{gen_text}"` 로
 
 가능하면 style 이미지의 실제 전사를 넣을 것. (단 위 echo 측정은 전사=목표라 best-case이며, 실사용
 전사≠생성텍스트에선 이득이 이보다 작다.) `drop_text` 와는 무관 — 빈값이라고 `drop_text` 를 바꿀 필요 없다.
+
+> ⚠️ **`style_text` 를 채우면 모델이 style 을 '이어서 그린다'(echo) — 크롭은 반드시 SOG 기준으로.**
+> `generate()` 는 `style_text` 가 **비어 있지 않으면 SOG 를 디코더에 넣지 않는다**(모델이 스스로 내야 한다).
+> 그래서 모델은 SOG 를 낼 때까지 style 텍스트를 계속 그리고, 그 사이 생성된 IMG 토큰마다 latent 열이 쌓인다.
+> `style폭+1` 같은 **고정 오프셋으로 자르면 그 echo 가 결과 앞에 그대로 남는다**(gen_text 에 없는 글자가 앞에 붙는
+> 증상). 실측: 폰트 6종에서 echo 누수 160~280px, 중앙값 80px·최대 2661px.
+> 올바른 경계는 `generate` 가 돌려주는 special 시퀀스의 **첫 SOG 열**이다(`infer_show.gen_arr` 규약).
+> `style_text=""` 경로는 SOG 가 강제 주입돼 echo 가 0 이라 이 버그가 안 보인다.
 
 ### 요약
 
@@ -571,10 +583,29 @@ CUDA_VISIBLE_DEVICES=0 .venv/bin/python tools_hf_upload.py model --verify-cer   
   깨지는 문제 → 원본 값으로 보완한다
 - ⚠️ **릴리즈 클래스와 학습 클래스는 style prefix 규약이 다르다.** 릴리즈
   `get_model_inputs` 는 style latent 뒤에 SOG placeholder 열(ones) 1개를 붙이고,
-  `generate` 가 반환 전에 `style폭+1` 만큼을 **내부에서 잘라낸다**. 로컬은 안 붙이고 안 자르며
+  `generate` 가 반환 전에 style prefix 를 **내부에서 잘라낸다**. 로컬은 안 붙이고 안 자르며
   `infer_show.gen_arr` 가 special 시퀀스의 첫 SOG 로 자른다. 둘을 섞어(릴리즈 출력에 gen_arr
   크롭을 겹쳐) 쓰면 이중 크롭으로 생성물이 날아간다 — 릴리즈 경로는 `generate_handwriting`
   하나로만 쓸 것. 검증은 `--verify-cer`(공개 API 그대로 CER 측정)로 한다
+- ⚠️ **(2026-08 수정) 그 내부 크롭이 `style폭+1` 고정 오프셋이라 style echo 가 남았다.**
+  `style_text` 를 주면 모델이 SOG 를 낼 때까지 style 을 이어 그리는데(위 「`style_text`」 경고),
+  고정 오프셋은 그 사이 열들을 못 자른다 → 생성물 앞에 gen_text 에 없는 글자가 붙는다.
+  `tools_hf_upload.patch_modeling` 이 이 줄을 **special 시퀀스의 첫 SOG 기준**으로 바꾼다(로컬과 동일 규약).
+  릴리즈 경로 CER 실측(n=100, 같은 텍스트·폰트로 페어링, cfg=1.0):
+
+  | 구간 | 패치 전 | 패치 후 |
+  |---|---|---|
+  | 전체 | 0.494 | **0.163** |
+  | 단문(1~3) | 1.253 | **0.391** |
+  | 중문(4~8) | 0.159 | **0.049** |
+  | 장문(9+) | 0.098 | **0.066** |
+
+  표본별 66승/29무/5패이고, 진 5개는 전부 echo 가 없던(폭 차이 ≤40px) 표본이라 패치가 아니라 실행 편차다.
+  `style_text=""` 경로는 크롭 인덱스가 완전히 동일 → 회귀 없음.
+  ⚠️ **아직 `--push` 안 함** — 위 수치는 로컬 스테이징 빌드 기준이고 HF 발행본은 여전히 옛 크롭이다.
+- ⚠️ **생성은 run-to-run 재현이 안 된다.** 같은 모델·같은 입력 2회에 픽셀 maxdiff 221, `--verify-cer`
+  (n=24) 3회에 CER 0.035 / 0.031 / 0.074. 비결정적 GPU 커널이 argmax 를 뒤집으면 그 뒤 생성이 통째로
+  갈라지기 때문. **n=24 는 게이트용이지 보고용 수치가 아니다** — 비교는 n≥100 페어링으로 할 것
 - 업로드하는 `modeling_eruku.py` 에는 **ink bbox 크롭**(`generate_handwriting(bbox_crop=True)`)을
   추가했다. 실제 스캔 손글씨의 여백이 latent std 를 폰트의 6~29배로 튀겨 runaway/blank 를
   만드는 문제(→ [`docs/VAE_ROBUSTNESS.md`](docs/VAE_ROBUSTNESS.md) ②)의 추론측 해결책
