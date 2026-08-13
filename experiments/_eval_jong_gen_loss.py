@@ -14,16 +14,14 @@
       --ckpt finetune_runs/eruku_short_fullmse/checkpoint_step_030000.pth --n 200
 """
 from __future__ import annotations
-import argparse, json, random, sys
+import argparse, json, random
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 
-HERE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
+from _common import REPO as HERE, load_line_x11, roundtrip, to_u8
 from infer_show import load_model, render_in_font, style_tensor, gen_from_style_batch
 from eval_echo_metrics import build_texts, font_can_render
 from eval_htr_cer import to_htr_input, htr_read, norm
@@ -139,20 +137,10 @@ def tally(gt_text, hyp, acc, tag, per_syl=None):
             r["jong_ins"] += 1
 
 
-@torch.no_grad()
 def vae_recon_arr(model, arr, dev):
     """GT 렌더 → 모델의 VAE roundtrip → uint8 라인이미지 (생성과 같은 디코더 경로)."""
-    t = torch.from_numpy(arr.astype(np.float32) / 255.0)[None, None]
     w64 = max(1, int(round(64 * arr.shape[1] / arr.shape[0])))
-    t = F.interpolate(t, size=(64, w64), mode="bilinear", align_corners=False).clamp(0, 1)
-    x = t * 2 - 1
-    w8 = (w64 + 7) // 8 * 8
-    if w8 != w64:
-        x = F.pad(x, (0, w8 - w64), value=1.0)
-    x = x.repeat(1, 3, 1, 1).to(dev)
-    z = model.vae.encode(x).latent_dist.mode()
-    rec = model.vae.decode(z).sample.clamp(-1, 1)[:, :1, :, :w64]
-    return (((rec[0, 0] + 1) / 2) * 255).clamp(0, 255).byte().cpu().numpy()
+    return to_u8(roundtrip(model.vae, load_line_x11(arr), dev)[..., :w64])   # 8배수 패딩분 제거
 
 
 def main():
@@ -204,11 +192,8 @@ def main():
     for i in range(0, len(jobs), args.batch_size):
         chunk = jobs[i:i + args.batch_size]
         sts = [style_tensor(gt) for _, gt in chunk]
-        try:
-            gens = gen_from_style_batch(model, sts, [t for t, _ in chunk], [t for t, _ in chunk],
-                                        args.cfg, args.max_new_tokens, dev)
-        except Exception as e:
-            print(f"  [skip batch] {e}"); continue
+        gens = gen_from_style_batch(model, sts, [t for t, _ in chunk], [t for t, _ in chunk],
+                                    args.cfg, args.max_new_tokens, dev)
         recs = [vae_recon_arr(model, gt, dev) for _, gt in chunk]
         # HTR 리더도 최대 150 스텝 자기회귀다 → 낱개로 부르면 여기가 병목이 된다.
         # to_htr_input 이 폭 768 로 고정해 주므로 그대로 배치로 묶어 한 번에 읽는다.

@@ -16,15 +16,15 @@ H2  학습 빈도가 설명변수인가?
   .venv/bin/python experiments/_eval_jong_hypotheses.py --vae-json <...> [--gen-json <...>]
 """
 from __future__ import annotations
-import argparse, json, sys
+import argparse, json
 from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
+from scipy.stats import pearsonr, spearmanr
 
-HERE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
-from _eval_jong_stroke_loss import decompose, jong_group  # noqa: E402
+from _common import REPO as HERE
+from _eval_jong_stroke_loss import decompose, jong_group
 
 CORPUS = HERE / "assets" / "corpus"
 
@@ -126,20 +126,11 @@ def quartiles(rows, key):
 
 
 def pearson(x, y):
-    x, y = np.asarray(x, float), np.asarray(y, float)
-    if len(x) < 3 or x.std() == 0 or y.std() == 0:
-        return float("nan")
-    return float(np.corrcoef(x, y)[0, 1])
+    return float(pearsonr(x, y).statistic)
 
 
 def spearman(x, y):
-    def rank(a):
-        a = np.asarray(a, float)
-        order = a.argsort()
-        r = np.empty(len(a), float)
-        r[order] = np.arange(len(a), dtype=float)
-        return r
-    return pearson(rank(x), rank(y))
+    return float(spearmanr(x, y).statistic)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

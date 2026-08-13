@@ -34,12 +34,7 @@ def _len_at(value, idx: int) -> int:
       학습·생성이 멀쩡히 돌아가 버린다(docs/STYLE_LEN_BUG.md 가 딱 그 사고였다).
       변환이 실패하면 그대로 터뜨려서 호출부를 고치게 한다.
     """
-    if isinstance(value, int):
-        return value
-    el = value[idx] if hasattr(value, '__getitem__') else value
-    if isinstance(el, torch.Tensor):
-        return int(el.reshape(-1)[0].item()) if el.dim() > 0 else int(el.item())
-    return int(el)
+    return int(value if isinstance(value, int) else value[idx])
 
 
 def pad_images(images, padding_value=1):
@@ -250,8 +245,7 @@ class Emuru(torch.nn.Module):
             'specials': specials_padded.long(),
             # 샘플별 '실제' 길이(패딩 제외, latent 열 단위). 배치 생성에서
             # generate_batch(prefix_lens=...) 로 넘겨야 패딩을 style 로 먹지 않는다.
-            'lengths': torch.tensor([min(el, max_seq_len) for el in lengths_list],
-                                    dtype=torch.long, device=self.T5.device),
+            'lengths': [min(el, max_seq_len) for el in lengths_list],
         }
 
     def _encode_text(self, style_text, gen_text):
@@ -415,8 +409,6 @@ class Emuru(torch.nn.Module):
         if prefix_lens is None:
             lens = [max_w] * bs
         else:
-            if isinstance(prefix_lens, torch.Tensor):
-                prefix_lens = prefix_lens.tolist()
             lens = [max(1, min(int(el), max_w)) for el in prefix_lens]
 
         # 텍스트 인코딩 — 루프 밖에서 한 번만 (원본은 매 토큰 encoder 재계산)
@@ -451,15 +443,10 @@ class Emuru(torch.nn.Module):
         plens = [p.size(0) for p in prefix_parts]
         pmax, d_model = max(plens), prefix_parts[0].size(-1)
         prefix = emb.new_zeros(bs, pmax, d_model)
-        if any(pl != pmax for pl in plens):
-            dec_mask = torch.zeros(bs, pmax, dtype=torch.long, device=device)
-            for el, p in enumerate(prefix_parts):
-                prefix[el, pmax - plens[el]:] = p
-                dec_mask[el, pmax - plens[el]:] = 1
-        else:
-            dec_mask = None                                  # 패딩이 없으면 마스크 불필요
-            for el, p in enumerate(prefix_parts):
-                prefix[el] = p
+        dec_mask = torch.zeros(bs, pmax, dtype=torch.long, device=device)
+        for el, p in enumerate(prefix_parts):
+            prefix[el, pmax - plens[el]:] = p
+            dec_mask[el, pmax - plens[el]:] = 1
 
         if use_cfg:
             if self.drop_img:
@@ -470,7 +457,7 @@ class Emuru(torch.nn.Module):
             enc_embeds = torch.cat([uncond_text_embeds, cond_text_embeds], dim=0)
             enc_mask = torch.cat([text_mask, text_mask], dim=0)
             dec_in = torch.cat([prefix, prefix], dim=0)
-            cur_mask = None if dec_mask is None else torch.cat([dec_mask, dec_mask], dim=0)
+            cur_mask = torch.cat([dec_mask, dec_mask], dim=0)
         else:
             enc_embeds, enc_mask = cond_text_embeds, text_mask
             dec_in, cur_mask = prefix, dec_mask
@@ -508,16 +495,11 @@ class Emuru(torch.nn.Module):
                               sog.view(1, 1, -1).expand(bs, 1, d_model),
                               self.query_emb(vae_latent))
             dec_in = torch.cat([nxt, nxt], dim=0) if use_cfg else nxt
-            if cur_mask is not None:
-                ones = torch.ones(cur_mask.size(0), 1, dtype=cur_mask.dtype, device=device)
-                cur_mask = torch.cat([cur_mask, ones], dim=1)
+            ones = torch.ones(cur_mask.size(0), 1, dtype=cur_mask.dtype, device=device)
+            cur_mask = torch.cat([cur_mask, ones], dim=1)
 
-        if step_lat:
-            lats = torch.cat(step_lat, dim=1)                        # [bs, t, 8]
-            specs = torch.stack(step_spec, dim=1)                    # [bs, t]
-        else:                                                        # max_new_tokens=0 → prefix 만 디코드
-            lats = z.new_zeros(bs, 0, z.size(-1))
-            specs = torch.zeros(bs, 0, dtype=torch.long, device=device)
+        lats = torch.cat(step_lat, dim=1)                            # [bs, t, 8]
+        specs = torch.stack(step_spec, dim=1)                        # [bs, t]
         imgs, specials = [], []
         for el in range(bs):
             eog = (specs[el] == 1).nonzero().flatten()

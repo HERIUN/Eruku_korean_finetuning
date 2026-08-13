@@ -149,7 +149,7 @@ def gen_from_style_batch(model, style_imgs, style_texts, gen_texts, cfg, max_new
         torch.manual_seed(seed)
     imgs, specials = model.generate_batch(dec, style_texts, gen_texts, cfg_scale=cfg,
                                           max_new_tokens=max_new, prefix_lens=lens)
-    return [crop_gen(im, sp, int(el) * 8) for im, sp, el in zip(imgs, specials, lens)]
+    return [crop_gen(im, sp, el * 8) for im, sp, el in zip(imgs, specials, lens)]
 
 
 def load_model(ckpt, device, vae_checkpoint=None):

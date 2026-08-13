@@ -20,18 +20,16 @@
       --vae-base blowing-up-groundhogs/emuru_vae --n-lines 120
 """
 from __future__ import annotations
-import argparse, json, random, sys
+import argparse, json, random
 from collections import defaultdict
 from pathlib import Path
 
 import numpy as np
 import torch
-import torch.nn.functional as F
 from PIL import Image, ImageDraw, ImageFont
 from diffusers import AutoencoderKL
 
-HERE = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(HERE))
+from _common import REPO as HERE, load_line_x11, roundtrip
 from custom_datasets.korean_alphabet import load_charset
 
 H = 64
@@ -84,20 +82,8 @@ def render64_with_spans(font_path, text, size=72, pad=14):
     spans = [(text[i], (ox + adv[i] - cx0) * scale, (ox + adv[i + 1] - cx0) * scale)
              for i in range(len(text))]
 
-    t = torch.from_numpy(arr.astype(np.float32) / 255.0)[None, None]
     w64 = max(1, int(round(H * arr.shape[1] / arr.shape[0])))
-    t = F.interpolate(t, size=(H, w64), mode="bilinear", align_corners=False).clamp(0, 1)
-    x = t * 2 - 1
-    w8 = (w64 + 7) // 8 * 8                      # VAE 는 폭 8배수에서만 정확 roundtrip
-    if w8 != w64:
-        x = F.pad(x, (0, w8 - w64), value=1.0)
-    return x, spans, w64
-
-
-@torch.no_grad()
-def roundtrip(vae, x, dev):
-    z = vae.encode(x.repeat(1, 3, 1, 1).to(dev)).latent_dist.mode()
-    return vae.decode(z).sample.clamp(-1, 1)[:, :1].cpu()
+    return load_line_x11(arr, h=H), spans, w64      # 64px 정규화 + [-1,1] + 폭 8배수 패딩
 
 
 def to01(t):
@@ -170,11 +156,8 @@ def main():
     per_syl = defaultdict(list)   # (model, 음절) → [(miss, bot_miss, ink)]  ← H1 회귀용
     for li, text in enumerate(lines):
         for font, tag in fonts:
-            try:
-                x, spans, w64 = render64_with_spans(font, text)
-            except Exception:
-                continue
-            if x is None:
+            x, spans, w64 = render64_with_spans(font, text)
+            if x is None:                          # 잉크 0 (그 폰트가 못 그리는 글자만 있는 줄)
                 continue
             gt = to01(x)
             for lbl, vae in vaes:
