@@ -8,33 +8,86 @@ generation, [arxiv 2510.23240](https://arxiv.org/abs/2510.23240)) 를 **한글 �
 - 방식: 공식 영어 pretrained 에서 출발, 온라인 합성 데이터(폰트=writer)로 fine-tune
 - 모델: T5-large + ByT5 tokenizer(한글 byte 처리) + 동결 VAE(`emuru_vae`) + 동결 OrigamiNet(영어 OCR, `alpha=1.0` 으로 loss 미사용)
 
-## 빠른 시작 (새 머신)
+## 빠른 시작
 
 ```bash
 git clone https://github.com/HERIUN/Eruku_korean_finetuning.git
 cd Eruku_korean_finetuning
+uv sync                       # 환경 (torch 2.9+cu128, diffusers/transformers/skimage …)
+```
 
-# 1. 환경 (uv)
-uv sync
+저장소의 **모든 기능은 루트의 세 스크립트**로 부른다. 인자 없이 실행하면 사용법이 나온다.
 
-# 2. (선택) 데이터 파이프라인 sanity check — 학습 샘플 8개 저장
-uv run python custom_datasets/korean_split.py --n 8 --style 1 8 --gen 1 32 --out /tmp/ksplit
+| | | |
+|---|---|---|
+| **`./train.sh`** | 학습 · 데이터 생성 | `best` `en2ko` `phase1` `phase2` `vae` `htr` `data` `refset` |
+| **`./inference.sh`** | 생성 · 시각화 · 릴리즈 | `best` `show` `matrix` `echo` `refset` `release` |
+| **`./eval.sh`** | 정량 평가 · 감사 · 실험 | `best` `cer` `easyocr` `echo` `all` `fonts` `exp` |
 
-# 3-A. 한글 Phase 1 — 한글 glyph 학습 (논문 레시피 내장: 짧은 2~3어절,
-#      virtual 256 = batch 128 × accum 2, lr 1e-4, 65000 step, num-workers 16)
-CUDA_VISIBLE_DEVICES=0 uv run python train/phase1.py
-#   → finetune_runs/korean_p1/  (정상완료 시 checkpoint_last.pth → Phase 2 가 resume)
-#   개별 인자 덮어쓰기 가능:  uv run python train/phase1.py --batch-size 16 --grad-accum 16 --max-steps 20000
+```bash
+./train.sh                              # 사용법
+./train.sh en2ko --lr 1e-5              # 뒤 인자는 그대로 넘어간다
+./train.sh en2ko --help                 # 해당 스크립트의 전체 인자
 
-# 3-B. 한글 Phase 2 — 긴 줄 일반화 (Phase 1 ckpt 에서 resume, +5000 step)
-#      논문 그대로: batch 2 × accum 128 = virtual 256, style 1~8 / gen 1~32
-CUDA_VISIBLE_DEVICES=0 uv run python train/phase2.py
-#   기본으로 korean_p1/checkpoint_last.pth 에서 resume, --extra-steps 5000 (= resume_step+5000 자동)
-#   다른 ckpt: uv run python train/phase2.py --resume finetune_runs/korean_p1/checkpoint_step_065000.pth
+GPU=2 ./eval.sh best                    # 쓸 GPU (기본 0)
+DRY=1 ./train.sh best all               # 실행 않고 커맨드만 출력
+```
 
-# (대안) 영어 pretrained → 바로 한글 긴 줄 — Phase 1 생략, 영어능력 보존
-#        lr 5e-5, max-img-len 8192, batch 16 × accum 16, english-frac 0.15, held-out val 로깅
-CUDA_VISIBLE_DEVICES=0 uv run python train/korean_from_en.py   # → finetune_runs/korean_en2ko/
+> 세 스크립트는 얇은 디스패처다. 실제 코드는 `train/` `eval/` `infer/` `tools/` 에 있고
+> (`./train.sh phase1` = `python train/phase1.py`), 직접 호출해도 똑같이 동작한다.
+> 다만 **`.venv/bin/python`** 으로 실행해야 한다 — 시스템 `python` 엔 의존성이 없다(스크립트는 알아서 쓴다).
+
+### 🎯 현재 best 모델 재현
+
+배포본 `finetune_runs/eruku_short_fullmse/checkpoint_step_030000.pth` 를 만든 **실제 순서**
+(각 run 의 `train_config.yml` 기록 기준)를 7단계로 박아뒀다. 근거·수치는
+[`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) §4·§5.
+
+```bash
+./train.sh best status    # 7단계 + 각 산출물이 이미 있는지 표시
+./train.sh best 7         # 한 단계만 (번호 또는 이름: short)
+./train.sh best all       # 없는 단계만 순서대로 (GPU 수십 시간)
+./eval.sh  best           # 재현 검증 — 아래 기대 수치를 같이 출력한다
+./inference.sh best       # 눈으로 확인 (생성 그리드 PNG)
+```
+
+| # | 단계 | 산출물 | 하는 일 |
+|---|---|---|---|
+| 1 | `base` | `korean_en2ko_fixed/checkpoint_step_011000.pth` | 영어 pretrained → 한글 (20k step, 채택 s11000) |
+| 2 | `htr` | `aux_htr_ko/htr_s20000` | 한글 HTR 리더 (VAE loss + 평가 리더) |
+| 3 | `vaedec` | `vae_korean_dec/vae_s15000` | VAE decoder-only 워밍업 |
+| 4 | `vaefull` | `vae_korean_full/vae_s15000` | VAE full + HTR 0.3 |
+| 5 | `vaemse` | `vae_korean_full_mse/vae_s28000` | VAE full **pure-L1** ← 릴리즈 VAE |
+| 6 | `readapt` | `eruku_readapt_fullvae/checkpoint_step_015000.pth` | 새 VAE latent 로 T5 재적응 (`--reset-vae`) |
+| 7 | `short` | `eruku_short_fullmse/checkpoint_step_030000.pth` | **단문강조 재적응 = best** |
+
+`./eval.sh best` 가 대조할 기대 수치 (n=100, cfg=1.0, coherent):
+
+| | 전체 | 단문(1~3) | 중문(4~8) | 장문(9~15) |
+|---|---|---|---|---|
+| 한글 (기록 / **실측 재현**) | 0.127 / **0.121** | 0.286 / **0.269** | 0.049 / **0.047** | 0.059 / **0.060** |
+| 영어 (기록 / **실측 재현**) | 0.045 / **0.032** | — / 0.073 | — / 0.015 | — / 0.025 |
+
+실측 재현 = 2026-08-14 에 `./eval.sh best` 를 그대로 돌린 값. 생성은 run-to-run 재현이 안 되므로
+±0.01 수준 차이는 정상이고, 판정은 **n≥100 페어링**으로만 한다.
+
+> ⚠️ 3·4단계는 **당시 실제로 거친 warm-start 체인**이라 남겨둔 것이고, 새로 만든다면
+> 5단계 레시피(full + pure-L1)를 원본 `emuru_vae` 에서 한 번에 돌리는 쪽이 낫다(§4).
+> 원본 run 들이 쓰던 `--val-fonts-dir assets/fonts_korean_unseen` 은 폴더가 정리돼 빠졌다 —
+> val_loss 절대값만 달라지고 생성·CER 결과에는 영향 없다.
+
+### 처음부터 학습 (best 재현이 아니라 새로 돌릴 때)
+
+```bash
+./train.sh data --n 8 --out /tmp/ksplit   # (선택) 데이터 파이프라인 sanity check
+
+# 논문 2-phase: Phase 1(짧은 어절로 glyph) → Phase 2(긴 줄 일반화)
+GPU=0 ./train.sh phase1                   # → finetune_runs/korean_p1/
+GPU=0 ./train.sh phase2                   # korean_p1/checkpoint_last.pth 에서 resume, +5000 step
+GPU=0 ./train.sh phase1 --batch-size 16 --grad-accum 16 --max-steps 20000   # 인자 덮어쓰기
+
+# (권장 대안) 영어 pretrained → 바로 한글 긴 줄 — Phase 1 생략, 영어능력 보존
+GPU=0 ./train.sh en2ko                    # → finetune_runs/korean_en2ko/
 ```
 
 > 진입점 구조: 공통 로직은 `train/core.py`(전체 인자 `make_parser` + 학습 루프)에 있고,
@@ -64,20 +117,20 @@ VAE-latent 디코딩·자기회귀·style 메커니즘은 영어 pretrained 에�
 
 ```bash
 # (1) 평가/loss 용 한글 HTR 리더 (easyocr 은 한글 GT 조차 CER 0.236 으로 saturated)
-CUDA_VISIBLE_DEVICES=0 .venv/bin/python train/aux_htr.py --out finetune_runs/aux_htr_ko
+./train.sh htr --out finetune_runs/aux_htr_ko
 
 # (2) VAE finetune — 권장 레시피: full(enc+dec) + HTR off(pure-L1)
-CUDA_VISIBLE_DEVICES=0 .venv/bin/python train/vae_korean.py \
+./train.sh vae --htr-checkpoint finetune_runs/aux_htr_ko/htr_s20000 \
   --train-part full --htr-weight 0 --kl-weight 1e-6 \
   --batch-size 8 --grad-accum 4 --lr 1e-4 --max-steps 30000 \
   --out finetune_runs/vae_korean_full     # → vae_sXXXXX/ (diffusers AutoencoderKL 폴더)
 
 # (3) 교체 평가 (decoder-only 는 재학습 없이 바로)
-CUDA_VISIBLE_DEVICES=0 .venv/bin/python eval/htr_cer.py --ckpt <eruku ckpt> \
+./eval.sh cer --ckpt <eruku ckpt> \
   --vae-checkpoint finetune_runs/vae_korean_full/vae_s30000 --n 100 --coherent
 
 # (4) full 은 latent 가 이동하므로 Eruku 재적응 필수 (--reset-vae 로 ckpt 의 옛 vae.* strip)
-CUDA_VISIBLE_DEVICES=0 .venv/bin/python train/korean_from_en.py \
+./train.sh en2ko \
   --resume <한글 ckpt> --vae-checkpoint finetune_runs/vae_korean_full/vae_s30000 --reset-vae \
   --out finetune_runs/eruku_readapt --extra-steps 15000
 ```
@@ -111,8 +164,7 @@ CUDA_VISIBLE_DEVICES=0 .venv/bin/python train/korean_from_en.py \
 ### 이어 학습 (resume)
 
 ```bash
-uv run python train/phase2.py \
-  --resume finetune_runs/korean_p2/checkpoint_step_004000.pth --max-steps 200000
+./train.sh phase2 --resume finetune_runs/korean_p2/checkpoint_step_004000.pth --max-steps 200000
 ```
 
 resume 시 이전 run 의 `train_config.yml` 과 인자가 다르면 `[config WARN]` 으로 알려줍니다
@@ -268,27 +320,53 @@ style 참조 이미지의 전사 텍스트. `f"{style_text}<sog>{gen_text}"` 로
 ## 추론 / 시각화
 
 ```bash
-# style ref 용 소규모 합성 세트 생성 (lines_json 포맷)
-uv run python custom_datasets/korean_fontset.py --per-font-train 5 --per-font-val 0 --out data/ref_set
+# 0) style ref 세트 — 뷰어들이 이걸 style 로 쓴다 (data/ 는 gitignore 라 새 클론이면 먼저 생성)
+./inference.sh refset --per-font-train 5 --per-font-val 0 --no-augment --out data/ref_set_clean
 
-# 생성 결과 그리드: [스타일 ref | 정답 예시 | 생성 cfg=...]
-CUDA_VISIBLE_DEVICES=0 uv run python infer/show.py \
+# 1) 가장 빠른 확인: best 모델로 생성 그리드 → _debug/best_show.png
+./inference.sh best
+./inference.sh best "쓰고 싶은 문장 2024년"
+
+# 2) 직접 지정: [스타일 ref | 정답 예시 | 생성 cfg=...]
+./inference.sh show \
   --ckpt finetune_runs/korean_p2/checkpoint_step_020000.pth \
-  --lines-json data/ref_set/train_lines.json \
+  --lines-json data/ref_set_clean/train_lines.json \
   --seed-text "오늘 날씨가 좋아서 친구와 공원에서 커피를 마셨다 2024년" \
   --cfgs 1.0 1.25 1.5 1.75 2.0 --n-writers 4 --out _debug/show.png
+
+# 3) 스타일 × 텍스트 매트릭스 / 모델 나란히 비교
+./inference.sh matrix --ckpt <ckpt> --out _debug/matrix.png
+./inference.sh echo   --out _debug/echo.png
 
 # style 텍스트(ref 전사) 제공 여부:
 #   기본        → style ref 의 텍스트를 조건으로 함께 줌
 #   --no-style-text → style 이미지만으로 스타일 파악(전사 미제공). 컬럼 라벨에 (no-stext) 표시.
 #   둘을 비교하려면 같은 인자로 두 번 실행(--out 만 다르게):
-uv run python infer/show.py --ckpt ... --out _debug/show_stext.png
-uv run python infer/show.py --ckpt ... --out _debug/show_nostext.png --no-style-text
+./inference.sh show --ckpt ... --out _debug/show_stext.png
+./inference.sh show --ckpt ... --out _debug/show_nostext.png --no-style-text
+```
+
+## 평가
+
+```bash
+./eval.sh best                        # best 모델 재현 검증 (한글+영어, 기대 수치 대조)
+./eval.sh cer  --ckpt <ckpt> --n 100 --coherent            # 한글 주 지표 (HTR CER)
+./eval.sh cer  --ckpt <ckpt> --n 100 --coherent --english  # 영어
+./eval.sh echo --ckpt <ckpt>          # echo 정량 (MSE/SSIM/LPIPS/FID)
+./eval.sh all  --models a=<ckptA> b=<ckptB> --coherent     # 여러 모델 × ko/en 배터리
+./eval.sh fonts                       # 폰트 품질 감사 (두부·malformed 글리프)
+
+./eval.sh exp                         # 일회성 실험 스크립트 목록
+./eval.sh exp jong_stroke_loss --n-lines 120   # experiments/jong_stroke_loss.py 실행
 ```
 
 ## repo 구조
 
 ```
+# 진입점 (루트에는 이 3개만)
+train.sh                   # 학습·데이터: best|en2ko|phase1|phase2|vae|htr|data|refset
+inference.sh               # 생성·시각화·릴리즈: best|show|matrix|echo|refset|release
+eval.sh                    # 평가·감사·실험: best|cer|easyocr|echo|all|fonts|exp
 # 학습
 train/core.py              # 학습 공통 코어 (make_parser 전체 인자 + 학습 루프)
 train/phase1.py            # Phase 1 진입점 (짧은 어절, batch128×2, 65000 step)
