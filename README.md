@@ -535,7 +535,10 @@ CUDA_VISIBLE_DEVICES=0 .venv/bin/python tools/hf_upload.py model --verify-cer   
 
   표본별 66승/29무/5패이고, 진 5개는 전부 echo 가 없던(폭 차이 ≤40px) 표본이라 패치가 아니라 실행 편차다.
   `style_text=""` 경로는 크롭 인덱스가 완전히 동일 → 회귀 없음.
-  ⚠️ **아직 `--push` 안 함** — 위 수치는 로컬 스테이징 빌드 기준이고 HF 발행본은 여전히 옛 크롭이다.
+  ✅ **2026-08-14 발행 완료** ([commit `0e3ce43`](https://huggingface.co/HERIUN/eruku_korean/commit/0e3ce430fde7372f71639fce8369846666c1d167)).
+  발행 전 검증: 키 정합성 missing/unexpected 0, 공개 API 실측 CER 0.052(n=24, GT바닥 0.003),
+  bbox 크롭 smoke test 통과. 발행 후 `./inference.sh hf` 재실행으로 echo 소멸을 눈으로 확인했다
+  (패치 전에는 생성물이 style 잔재 `산이:`·`권한:` 로 시작했다).
 - ⚠️ **생성은 run-to-run 재현이 안 된다.** 같은 모델·같은 입력 2회에 픽셀 maxdiff 221, `--verify-cer`
   (n=24) 3회에 CER 0.035 / 0.031 / 0.074. 비결정적 GPU 커널이 argmax 를 뒤집으면 그 뒤 생성이 통째로
   갈라지기 때문. **n=24 는 게이트용이지 보고용 수치가 아니다** — 비교는 n≥100 페어링으로 할 것
