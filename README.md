@@ -21,7 +21,7 @@ uv sync                       # 환경 (torch 2.9+cu128, diffusers/transformers/
 | | | |
 |---|---|---|
 | **`./train.sh`** | 학습 · 데이터 생성 | `best` `en2ko` `phase1` `phase2` `vae` `htr` `data` `refset` |
-| **`./inference.sh`** | 생성 · 시각화 · 릴리즈 | `best` `show` `matrix` `echo` `refset` `release` |
+| **`./inference.sh`** | 생성 · 시각화 · 릴리즈 | `best` `hf` `show` `matrix` `echo` `refset` `release` |
 | **`./eval.sh`** | 정량 평가 · 감사 · 실험 | `best` `cer` `easyocr` `echo` `all` `fonts` `exp` |
 
 ```bash
@@ -142,11 +142,20 @@ VAE-latent 디코딩·자기회귀·style 메커니즘은 영어 pretrained 에�
 - `--logvar-weighting` — 원본 LDM 관례의 학습형 관측 노이즈 가중. 기본 off, 우리 세팅선 무익
 - `--val-font-frac` — 학습 폰트에서 val 폰트를 떼는 비율(폰트 일반화 측정). VRAM ~20GB(batch 8)
 
-첫 실행 시 HuggingFace 에서 `google-t5/t5-large`(config), `google/byt5-small`(tokenizer),
-`blowing-up-groundhogs/emuru_vae`, 그리고 **영어 pretrained weight**
-(`blowing-up-groundhogs/eruku` 의 `pytorch_model.bin`, ~2.9GB) 를 자동 다운로드하므로
-인터넷이 필요합니다. OrigamiNet OCR ckpt 는 불필요 (alpha=1.0 → OCR loss 미사용,
-공식 HF 릴리즈에도 OCR 모듈 없음).
+### 무엇이 자동으로 받아지고, 무엇이 안 받아지나
+
+| 언제 | 무엇 | 크기 |
+|---|---|---|
+| 모델 생성 시 항상 | `google/byt5-small` 토크나이저 + `google-t5/t5-large` **config 만**(가중치 아님 — `T5ForConditionalGeneration(config)` 는 랜덤 초기화) | 작음 |
+| 모델 생성 시 항상 | `blowing-up-groundhogs/emuru_vae` VAE 가중치 | ~300MB |
+| 학습 시작 (`--resume` 없을 때) | 영어 pretrained `blowing-up-groundhogs/eruku` 의 `pytorch_model.bin` | ~2.9GB |
+| `./inference.sh hf` | 발행본 `HERIUN/eruku_korean` + 페어 VAE `HERIUN/emuru_vae_korean` | ~3.2GB |
+
+⚠️ **한글을 아는 T5 본체 가중치(`.pth`)는 자동으로 받지 않는다.** `infer/show.py`·`eval/*` 는
+`--ckpt` 로 로컬 파일을 읽고, `finetune_runs/` 는 gitignore 라 새 클론엔 없다. 그래서 새 환경에서는
+**`./inference.sh hf`(발행본 사용)** 로 돌리거나 `./train.sh best` 로 직접 만들어야 한다.
+`./inference.sh best` 는 로컬 ckpt 가 없으면 알아서 발행본 경로로 넘어간다.
+OrigamiNet OCR ckpt 는 불필요 (alpha=1.0 → OCR loss 미사용, 공식 HF 릴리즈에도 OCR 모듈 없음).
 
 ### 학습 산출물 (`--out` 디렉토리)
 
@@ -326,6 +335,11 @@ style 참조 이미지의 전사 텍스트. `f"{style_text}<sog>{gen_text}"` 로
 # 1) 가장 빠른 확인: best 모델로 생성 그리드 → _debug/best_show.png
 ./inference.sh best
 ./inference.sh best "쓰고 싶은 문장 2024년"
+#    로컬 ckpt(finetune_runs/…, gitignore)가 없으면 자동으로 아래 HF 릴리즈 경로로 넘어간다.
+
+# 1') 로컬 ckpt 없이 — 발행된 HF 릴리즈(공개 API)로 생성
+./inference.sh hf                                   # HERIUN/eruku_korean + 페어 VAE 자동 다운로드
+./inference.sh hf --style-image my_handwriting.png --style-text "전사" --bbox-crop
 
 # 2) 직접 지정: [스타일 ref | 정답 예시 | 생성 cfg=...]
 ./inference.sh show \
@@ -365,7 +379,7 @@ style 참조 이미지의 전사 텍스트. `f"{style_text}<sog>{gen_text}"` 로
 ```
 # 진입점 (루트에는 이 3개만)
 train.sh                   # 학습·데이터: best|en2ko|phase1|phase2|vae|htr|data|refset
-inference.sh               # 생성·시각화·릴리즈: best|show|matrix|echo|refset|release
+inference.sh               # 생성·시각화·릴리즈: best|hf|show|matrix|echo|refset|release
 eval.sh                    # 평가·감사·실험: best|cer|easyocr|echo|all|fonts|exp
 # 학습
 train/core.py              # 학습 공통 코어 (make_parser 전체 인자 + 학습 루프)
@@ -385,6 +399,7 @@ assets/download_script/tools_fetch_gf.py  # Google Fonts 수집기 (--lang ko|en
 assets/font_view/render_overview.py       # 폰트 오버뷰 montage (샘플 렌더 + 글자수 분류)
 tools/font_audit.py        # 폰트 품질 감사: 미지원(두부)·malformed 글리프 스캔 (코퍼스 기준)
 # 추론 / 평가  (infer/show.py 가 공유 라이브러리: load_model/gen_arr/render_in_font …)
+infer/release.py           # 발행된 HF 릴리즈(공개 API)로 생성 — 로컬 ckpt 불필요
 infer/show.py              # 자기설명적 결과 뷰어 [스타일ref|정답|생성 cfg…] (--exclude-writers 로 폰트 제외)
 infer/matrix.py            # 스타일×텍스트 매트릭스 뷰어 (1 style → 여러 gen_text)
 infer/echo_compare.py      # echo(style==gen) 모델 나란히 비교 뷰어
