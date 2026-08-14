@@ -53,7 +53,7 @@ DRY=1 ./train.sh best all               # 실행 않고 커맨드만 출력
 
 | # | 단계 | 산출물 | 하는 일 |
 |---|---|---|---|
-| 1 | `base` | `korean_en2ko_fixed/checkpoint_step_011000.pth` | 영어 pretrained → 한글 (20k step, 채택 s11000) |
+| 1 | `base` | `korean_en2ko_fixed/checkpoint_step_011000.pth` | 영어 pretrained → 한글. **Phase 1 생략** — `korean_from_en.py` 로 긴 줄(style 1~8 / gen 1~32)만 학습 (20k step, 채택 s11000) |
 | 2 | `htr` | `aux_htr_ko/htr_s20000` | 한글 HTR 리더 (VAE loss + 평가 리더) |
 | 3 | `vaedec` | `vae_korean_dec/vae_s15000` | VAE decoder-only 워밍업 |
 | 4 | `vaefull` | `vae_korean_full/vae_s15000` | VAE full + HTR 0.3 |
@@ -71,6 +71,10 @@ DRY=1 ./train.sh best all               # 실행 않고 커맨드만 출력
 실측 재현 = 2026-08-14 에 `./eval.sh best` 를 그대로 돌린 값. 생성은 run-to-run 재현이 안 되므로
 ±0.01 수준 차이는 정상이고, 판정은 **n≥100 페어링**으로만 한다.
 
+> ℹ️ 1단계는 **`train/phase2.py` 가 아니다.** phase2 는 Phase 1 ckpt resume 전제(lr 1e-4)라 영어
+> pretrained 에서 바로 못 쓴다. 어절 범위·dropout·virtual batch 는 phase2 와 같고, 시작점(영어
+> pretrained)·lr(5e-5)·영어 15% 혼합·val 로깅만 다른 `korean_from_en.py` 를 쓴다.
+>
 > ⚠️ 3·4단계는 **당시 실제로 거친 warm-start 체인**이라 남겨둔 것이고, 새로 만든다면
 > 5단계 레시피(full + pure-L1)를 원본 `emuru_vae` 에서 한 번에 돌리는 쪽이 낫다(§4).
 > 원본 run 들이 쓰던 `--val-fonts-dir assets/fonts_korean_unseen` 은 폴더가 정리돼 빠졌다 —

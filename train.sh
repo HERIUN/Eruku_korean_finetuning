@@ -34,7 +34,7 @@ usage() { awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; }
 # 실제로 배포본 finetune_runs/eruku_short_fullmse/checkpoint_step_030000.pth 를
 # 만들어낸 순서 그대로다(train_config.yml 기록 기준). 근거·수치는 docs/EXPERIMENTS.md §4·§5.
 BEST_STAGES=(
-  "1 base    finetune_runs/korean_en2ko_fixed/checkpoint_step_011000.pth  영어 pretrained → 한글 (20k step, 채택은 s11000)"
+  "1 base    finetune_runs/korean_en2ko_fixed/checkpoint_step_011000.pth  영어 pretrained → 한글 (Phase 1 생략, 긴 줄만 20k step, 채택은 s11000)"
   "2 htr     finetune_runs/aux_htr_ko/htr_s20000                          한글 HTR 리더 (VAE loss + 평가 리더)"
   "3 vaedec  finetune_runs/vae_korean_dec/vae_s15000                      VAE decoder-only 워밍업"
   "4 vaefull finetune_runs/vae_korean_full/vae_s15000                     VAE full + HTR 0.3"
