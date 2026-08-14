@@ -63,7 +63,7 @@ def build_natural_jong(n_lines, rng, per_line_cluster=2, per_line_other=2):
     그 사이를 메운다 — **어휘는 실제 단어 그대로 두고 겹받침 포함 단어만 골라** 표본을 키운다.
     한 라인에 겹받침 단어와 일반 단어를 섞으므로 대조군(홑받침/없음)이 같은 이미지에서 나온다.
     """
-    import gen_korean_fontset as G
+    import custom_datasets.korean_fontset as G
     A = HERE / "assets"
     ko = G.build_pools(A / "corpus/korean_lines.txt", A / "corpus/chars.txt",
                        str(A / "corpus/english_words.txt"), 0, rng)["ko"]

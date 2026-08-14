@@ -30,7 +30,7 @@ Eruku는 픽셀을 직접 뱉지 않는다. 64px 높이 라인 이미지를 VAE�
 
 ## 1. 학습 모듈이 요구하는 입력
 
-`korean_split_dataset.split_collate` (`korean_split_dataset.py:207`) 가 만드는 배치 dict가
+`custom_datasets.korean_split.split_collate` (`custom_datasets/korean_split.py:207`) 가 만드는 배치 dict가
 학습 루프가 요구하는 전부다. 외부 데이터로 갈아끼우려면 **이 6개 키만 맞추면 된다.**
 
 | 키 | 타입 | 설명 |
@@ -64,7 +64,7 @@ gen_text   = "곳 Pierro… 껄"                gen_img   [3, 64, 379]   gen_img
 **샘플 하나만 놓고 보면 얻을 수 있다.** 실제로 `split_collate` 가 하는 일이 정확히 그거다:
 
 ```python
-"style_img_len": [b["style_img"].shape[-1] for b in batch],   # korean_split_dataset.py:214
+"style_img_len": [b["style_img"].shape[-1] for b in batch],   # custom_datasets/korean_split.py:214
 ```
 
 문제는 **그 시점이 배치로 묶이기 직전**이라는 것이다. 모델에 도착할 땐 이미 늦는다.
@@ -72,8 +72,8 @@ gen_text   = "곳 Pierro… 껄"                gen_img   [3, 64, 379]   gen_img
 ### (1) 배치 패딩이 폭 정보를 지운다 — 그것도 "복구 불가능하게"
 
 `get_model_inputs` 는 맨 처음 `pad_images(...)` 로 배치 안의 서로 다른 폭을 최대폭에 맞춘다
-(`eruku_continuous_inf.py:198`). 그런데 **패딩 값이 `1`**(= 정규화 후 흰색, `pad_images` 기본값,
-`eruku_continuous_inf.py:56`)이다. 글자 사이 여백도 흰색이다. 즉 **패딩과 실제 여백이 픽셀값으로 구분되지 않는다.**
+(`models/eruku.py:198`). 그런데 **패딩 값이 `1`**(= 정규화 후 흰색, `pad_images` 기본값,
+`models/eruku.py:56`)이다. 글자 사이 여백도 흰색이다. 즉 **패딩과 실제 여백이 픽셀값으로 구분되지 않는다.**
 
 ![why len](img_module_io/02_why_len.png)
 
@@ -103,7 +103,7 @@ mi = model.get_model_inputs([style_img], None, style_len=W, gen_len=None, max_im
 ### (4) 길이는 폭이 아니라 "예산(budget)" 으로도 쓰인다
 
 `get_model_inputs` 안에서 `sl`/`gl` 은 그대로 쓰이지 않고 clamp된다
-(`eruku_continuous_inf.py:224`, `:240`):
+(`models/eruku.py:224`, `:240`):
 
 ```python
 sl = max(64, min(sl, style_img_embeds.shape[-1] * 8, max_img_len // 2))   # style 은 예산의 절반까지
@@ -133,7 +133,7 @@ style이 예산을 다 먹어 gen 꼬리가 잘리면 모델이 EOG 위치를 �
 `get_model_inputs` 가 `@torch.no_grad()` 인 이유도 같다 — VAE는 동결이라 텐서 전처리일 뿐이고,
 텍스트는 학습되는 embedding을 타야 하므로 `forward` 안에 있어야 한다.
 
-텍스트 인코딩 (`eruku_continuous_inf.py:284`):
+텍스트 인코딩 (`models/eruku.py:284`):
 
 ```python
 pairs = [f"{style}<sog>{gen}" for style, gen in zip(style_text, gen_text)]
@@ -147,7 +147,7 @@ style과 gen 텍스트를 `<sog>` 로 이어 **한 문자열**로 넣는다. 디
 
 ## 4. `get_model_inputs` 가 만드는 것 (모델이 실제로 받는 시퀀스)
 
-`eruku_continuous_inf.py:191`. 반환 3개:
+`models/eruku.py:191`. 반환 3개:
 
 | 키 | shape | 내용 |
 |---|---|---|
@@ -169,7 +169,7 @@ style과 gen 텍스트를 `<sog>` 로 이어 **한 문자열**로 넣는다. 디
 
 ## 5. 출력 (a) — 학습: `forward()`
 
-`eruku_continuous_inf.py:295`. 호출과 반환:
+`models/eruku.py:295`. 호출과 반환:
 
 ```python
 losses, pred_latent = model.forward(
@@ -196,7 +196,7 @@ losses, pred_latent = model.forward(
 ![teacher forced](img_module_io/04_teacher_forced.png)
 
 > `pred_latent[..., i]` 는 입력 `x_i` 의 예측이라 **GT와 같은 인덱스로 잘라야 짝이 맞는다.**
-> 디코더 입력에 `sos` 를 붙이고 `output.logits[:, :-1]` 을 쓰기 때문에 (`eruku_continuous_inf.py:341`)
+> 디코더 입력에 `sos` 를 붙이고 `output.logits[:, :-1]` 을 쓰기 때문에 (`models/eruku.py:341`)
 > 반환 텐서는 이미 정렬돼 있다 — 따로 shift 할 필요가 없다.
 
 **1)과 2)의 선명도가 다른 게 정상이다.** 2)는 1)을 그대로 쓴 게 아니라 **VAE를 한 번 왕복한 것**
@@ -214,7 +214,7 @@ losses, pred_latent = model.forward(
 
 > ⚠️ 눈에 보이는 열화의 **대부분은 VAE의 결정적 재구성 한계가 아니라 KL posterior 샘플링
 > 노이즈**다(9.3배 차이). `_img_encode` 는 `.latent_dist.sample()` 을 쓰는데
-> (`eruku_continuous_inf.py:188`, 원본 Emuru/LDM 관례) **repo의 VAE 측정 스크립트는 전부
+> (`models/eruku.py:188`, 원본 Emuru/LDM 관례) **repo의 VAE 측정 스크립트는 전부
 > `.mode()`** 를 쓴다(`docs/_vae_capacity.py:41`, `experiments/common.py:62`, …).
 > 즉 문서화된 "VAE 한글 재구성 한계" 수치는 **모델이 실제로 받는 것보다 깨끗한 경로**를 잰 값이다.
 >
@@ -257,7 +257,7 @@ MSE 쪽은 `specials!=2` 라 패딩이 자동 제외된다.
 
 ## 6. 출력 (b) — 추론: `generate()` / `generate_batch()`
 
-`eruku_continuous_inf.py:419`. `gen_img` 없이 **style prefix만** 넣고 EOG가 나올 때까지 열을 하나씩 뽑는다.
+`models/eruku.py:419`. `gen_img` 없이 **style prefix만** 넣고 EOG가 나올 때까지 열을 하나씩 뽑는다.
 
 ```python
 mi = model.get_model_inputs([style_img], None, style_len=W, gen_len=None, max_img_len=2048)
@@ -287,8 +287,8 @@ style 이미지의 필체를 그대로 가져와 새 텍스트를 썼다(`곳 Pi
 
 ```python
 from torch.utils.data import DataLoader
-from korean_split_dataset import make_dataset, split_collate
-from eruku_continuous_inf import Emuru
+from custom_datasets.korean_split import make_dataset, split_collate
+from models.eruku import Emuru
 
 ds = make_dataset(style_range=(1, 8), gen_range=(1, 32), seed=42)   # 온라인 무한 합성
 dl = DataLoader(ds, batch_size=2, collate_fn=split_collate, num_workers=16)

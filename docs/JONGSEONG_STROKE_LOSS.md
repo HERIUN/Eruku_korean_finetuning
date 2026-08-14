@@ -188,7 +188,7 @@ R² = 0.327.
 ### ⚠️ 정정: 코퍼스 빈도 ≠ 학습 노출량
 
 처음엔 `assets/corpus` 의 **토큰 빈도**를 노출 대리변수로 썼는데 **틀렸다**. 학습 샘플러
-(`gen_korean_fontset.MixedLineSampler`, `korean_split_dataset.build_samplers`)는 코퍼스 빈도를
+(`custom_datasets.korean_fontset.MixedLineSampler`, `custom_datasets.korean_split.build_samplers`)는 코퍼스 빈도를
 쓰지 않는다:
 
 - `build_pools` 가 코퍼스에서 단어를 **`set` 으로** 모은다 → 빈도 정보가 그 시점에 소멸
@@ -253,7 +253,7 @@ R² = 0.057 (VAE 는 0.330). 음절 정체성만으로는 생성 정확도의 6%
 
 ### 결정적 단서: byte 토크나이저에 종성 구조가 없다
 
-모델의 텍스트 조건은 **byT5-small = UTF-8 바이트 단위**다(`eruku_continuous_inf.py:70`).
+모델의 텍스트 조건은 **byT5-small = UTF-8 바이트 단위**다(`models/eruku.py:70`).
 한글 완성형은 3바이트인데, 같은 종성을 쓰는 음절들이 **바이트를 하나도 공유하지 않는다**:
 
 | 음절 | 바이트 |
@@ -409,7 +409,7 @@ coherent 에서 격차가 안 보인 건 순전히 n=13 의 검정력 부족이�
 C2 는 노출만 건드리는데 노출은 이미 통제해도 격차가 남는다는 게 측정 결과다.
 
 **구현 지점**: 텍스트가 들어가는 곳은 두 곳뿐 —
-`eruku_continuous_inf.py:268`(forward) 와 `:419`(generate_batch). 공용 `_encode_text()` 로
+`models/eruku.py:268`(forward) 와 `:419`(generate_batch). 공용 `_encode_text()` 로
 묶고 학습·추론에 **동일하게** 적용해야 한다(불일치 시 조용히 망가짐).
 byT5 는 바이트 단위라 **vocab 변경·임베딩 리사이즈 불필요**.
 
@@ -425,7 +425,7 @@ byT5 는 바이트 단위라 **vocab 변경·임베딩 리사이즈 불필요**.
 
 ### C2. 겹받침 노출 상향 (샘플러) — 저비용 병행
 
-**무엇**: `korean_split_dataset.build_samplers` 의 `rand` 풀을 종성 균등으로 바꾸거나
+**무엇**: `custom_datasets.korean_split.build_samplers` 의 `rand` 풀을 종성 균등으로 바꾸거나
 `rand` 가중치(현재 0.15)를 올린다. 현재 겹받침 실 노출은 홑받침의 0.52배.
 
 **기대치는 낮게 잡을 것**: 노출을 통제해도 격차가 −0.19 남았다 → 노출만으로는 한계가 명확하다.
@@ -443,7 +443,7 @@ VAE 는 건드리지 않는다.
 
 **무엇**: 디코더 각 latent 열에서 그 열이 속한 음절의 (초성, 중성, 종성)을 맞추는 보조 헤드를
 붙여 latent 표현이 받침 정체성을 담도록 강제한다. 모델에 이미 미사용 `t5_to_ocr` 헤드
-(`eruku_continuous_inf.py:103`, alpha=1.0 이라 loss 미사용)가 있어 자리는 있다.
+(`models/eruku.py:103`, alpha=1.0 이라 loss 미사용)가 있어 자리는 있다.
 
 **리스크**: 열↔음절 정렬 라벨을 만들어야 하는데 자간이 균일하지 않아 정렬이 근사적이다.
 C1 보다 침습적이므로 C1 이 실패했을 때만.

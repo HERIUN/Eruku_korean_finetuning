@@ -1,7 +1,7 @@
 # style/gen 길이 clamp 단위 버그 — style 이 1/8 로 잘려 학습되던 문제
 
 ## 요약
-`Emuru.get_model_inputs`(`eruku_continuous_inf.py`)에서 style/gen 길이를 제한하는 `min()` 의 항들이
+`Emuru.get_model_inputs`(`models/eruku.py`)에서 style/gen 길이를 제한하는 `min()` 의 항들이
 **단위가 섞여**(픽셀 vs latent) 있어, 이 포크의 패딩 방식(배치최대)에서는 **style 이 실제 폭의 ~1/8(≈80px, 글자 1개 수준)로 잘려서** VAE 조건으로 들어갔다. 원본 repo 는 style 을 고정 8192px 로 패딩해 이 버그가 우연히 가려져 있었다.
 
 - **증상:** style 조건이 거의 안 들어감 → 스타일 전이 품질 저하. 잘리는 양이 배치 최대폭에 의존해 학습/추론·배치마다 들쭉날쭉.
@@ -115,7 +115,7 @@ def pad_images_fixed(images, max_width=Config.MAX_IMG_LEN=8192, padding_value=1)
 ---
 
 ## 적용한 수정 (A안: 단위 맞추기)
-`eruku_continuous_inf.py`:
+`models/eruku.py`:
 ```python
 # style
 sl = max(64, min(sl, style_img_embeds.shape[-1] * 8, max_img_len // 2))
@@ -167,7 +167,7 @@ PYTHONPATH=. .venv/bin/python docs/_verify_style_len.py
 
 ## 관련 버그: 이중정규화 (`_img_encode`)  — 2026-07 수정
 
-`korean_split_dataset.py --show-model-input`(dump_samples 의 '모델이 받는 style' 복원 열)으로
+`custom_datasets/korean_split.py --show-model-input`(dump_samples 의 '모델이 받는 style' 복원 열)으로
 파이프라인을 검증하다 발견. **style-len(위)과는 별개**의 전처리 단위 문제.
 
 - **증상:** `_img_encode` 가 이미 `[-1,1]` 인 입력(dataset `t_norm` / infer `style_tensor` 모두
@@ -183,5 +183,5 @@ PYTHONPATH=. .venv/bin/python docs/_verify_style_len.py
 - **수정:** `_img_encode` 에서 `self.normalize(img)` 제거 → VAE 가 정상 `[-1,1]` 입력을 받음.
   재구성/조건 품질 정상화. **재학습 시 반영**(style-len 재학습과 동일 시점).
 
-→ 데이터 파이프라인 검증 도구: `uv run python korean_split_dataset.py --n 8 --show-model-input --out /tmp/ks`
+→ 데이터 파이프라인 검증 도구: `uv run python custom_datasets/korean_split.py --n 8 --show-model-input --out /tmp/ks`
   (각 행에 '모델이 실제로 받는 style' 복원 열 → style-len fix·정규화가 반영됐는지 눈으로 확인)

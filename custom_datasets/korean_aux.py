@@ -12,7 +12,7 @@ collate:
   text_logits_s2s [B,T](pad=0), texts_len [B], tgt_key_padding_mask [B,T](True=pad),
   tgt_key_mask = subsequent_mask(T-1)  (decoder self-attn causal, 입력이 [:, :-1] 라 T-1)
 
-렌더 파이프라인/샘플러는 korean_split_dataset.make_dataset(KoreanSplitFontSquare) 재사용.
+렌더 파이프라인/샘플러는 custom_datasets.korean_split.make_dataset(KoreanSplitFontSquare) 재사용.
 알파벳은 custom_datasets.korean_alphabet(코퍼스 기반, latin 인덱스 pretrained 보존).
 """
 from __future__ import annotations
@@ -26,10 +26,10 @@ import torch.nn.functional as F
 from PIL import Image
 from torch.utils.data import Dataset
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parents[1]   # 저장소 루트
 ASSETS = HERE / "assets"
 
-from korean_split_dataset import make_dataset
+from custom_datasets.korean_split import make_dataset
 from custom_datasets.korean_alphabet import get_korean_alphabet
 from custom_datasets.subsequent_mask import subsequent_mask
 

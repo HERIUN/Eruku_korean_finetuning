@@ -16,7 +16,7 @@ import webdataset as wds
 
 from accelerate import Accelerator, DistributedDataParallelKwargs
 from custom_datasets import dataset_factory
-from eruku_continuous_inf import DDPCompatibleEmuru
+from models.eruku import DDPCompatibleEmuru
 from hwd.datasets.shtg import KaraokeLines
 from torch.utils.data import Dataset
 from torchvision import transforms as T

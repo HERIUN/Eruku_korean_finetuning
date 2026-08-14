@@ -30,7 +30,7 @@ full_mse VAE + 단문강조 재적응으로 **폰트-렌더 입력**의 한글 �
   2. 실제 손글씨(희미·얇음) 복원은 오히려 **+89% 악화**(overshoot — 얇은 획을 뭉갠 검정으로).
   3. Eruku 가 필압·농담 style 조건을 못 받음(appearance 소실) → real-HW conditioning OOD 에 기여.
 - **수정 방향(재학습 필요, 미적용)**: 타깃에 **입력과 매칭된 잉크 alpha** 부여(농담 보존 denoising —
-  배경/블러만 제거하고 잉크농도는 유지). `korean_aux_dataset._make_rgb`/`__getitem__` 에서 alpha 를
+  배경/블러만 제거하고 잉크농도는 유지). `custom_datasets.korean_aux._make_rgb`/`__getitem__` 에서 alpha 를
   한 번 뽑아 **rgb 입력과 bw 타깃이 공유**하도록. 단 VAE 가 바뀌면 latent 이동 → Eruku 재적응 필요.
 - **대안**: 원본 emuru VAE 는 이미 농담보존 + real-HW 복원이 우수 → 재설계 대신 **원본 유지** 또는
   매우 약한 finetune 도 선택지.
@@ -62,7 +62,7 @@ T5 조건이 OOD → runaway(EOG 못 뱉음)/blank.
 
 ### 왜 bbox 크롭이 통하나 — 학습 갭
 
-`korean_split_dataset` 학습 파이프라인은 style 을 `TailorTensor(ink 타이트크롭) → ImgResize(64)` 로
+`custom_datasets.korean_split` 학습 파이프라인은 style 을 `TailorTensor(ink 타이트크롭) → ImgResize(64)` 로
 **항상 텍스트가 프레임을 꽉 채운 상태**로만 만든다 → 스케일/여백 변화가 전무. 그래서 모델은
 "작은 글자 + 큰 여백" style 을 **한 번도 못 봤고**, 실제 스캔(여백 있음)이 OOD → runaway 로 이어진다.
 bbox 크롭이 통하는 근본 이유 = 추론 입력을 이 학습분포(텍스트가 프레임 채움)에 맞추는 것.

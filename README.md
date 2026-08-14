@@ -18,7 +18,7 @@ cd Eruku_korean_finetuning
 uv sync
 
 # 2. (선택) 데이터 파이프라인 sanity check — 학습 샘플 8개 저장
-uv run python korean_split_dataset.py --n 8 --style 1 8 --gen 1 32 --out /tmp/ksplit
+uv run python custom_datasets/korean_split.py --n 8 --style 1 8 --gen 1 32 --out /tmp/ksplit
 
 # 3-A. 한글 Phase 1 — 한글 glyph 학습 (논문 레시피 내장: 짧은 2~3어절,
 #      virtual 256 = batch 128 × accum 2, lr 1e-4, 65000 step, num-workers 16)
@@ -120,7 +120,7 @@ resume 시 이전 run 의 `train_config.yml` 과 인자가 다르면 `[config WA
 
 ## 학습 데이터 생성 (온라인 합성, 디스크 0)
 
-학습 데이터는 **디스크에 미리 저장하지 않고 매 step 새로 합성**한다 (`korean_split_dataset.py`
+학습 데이터는 **디스크에 미리 저장하지 않고 매 step 새로 합성**한다 (`custom_datasets/korean_split.py`
 = 원본 repo `OnlineSplitFontSquare` 의 한글 서브클래스). 따라서 모든 샘플이 unique 이고
 사실상 무한 데이터셋. 한 샘플 = `(style_img, style_text, gen_img, gen_text)` 4-tuple.
 
@@ -140,7 +140,7 @@ resume 시 이전 run 의 `train_config.yml` 과 인자가 다르면 `[config WA
 
 ### (2) 텍스트 = MixedLineSampler 로 합성한 가짜 라인
 style 텍스트와 gen(target) 텍스트를 **각각 독립적으로**, 아래 비중으로 토큰을 섞어 1줄 생성
-(`korean_split_dataset.py:65`, 원본 논문의 "English + random words" 를 한글로 확장):
+(`custom_datasets/korean_split.py:65`, 원본 논문의 "English + random words" 를 한글로 확장):
 
 | 토큰 종류 | 비중 | 출처 |
 |---|---|---|
@@ -163,7 +163,7 @@ style 텍스트와 gen(target) 텍스트를 **각각 독립적으로**, 아래 �
    종이배경 합성, ink jitter. → 실제 손글씨의 왜곡에 robust 하게 학습.
    (생성 결과가 휘어 보이는 건 이 warp 를 모델이 학습·재현한 정상 동작)
 3. 폭 기준으로 잘라 `style_img`(조건) / `gen_img`(target) 로 분리.
-- 데이터 sanity check: `uv run python korean_split_dataset.py --n 8 --out /tmp/ksplit`
+- 데이터 sanity check: `uv run python custom_datasets/korean_split.py --n 8 --out /tmp/ksplit`
   → 8개 style/gen pair + montage 저장.
 
 ### 원본 repo(`OnlineSplitFontSquare` + `TextSampler`) 대비 변경점
@@ -175,7 +175,7 @@ style 텍스트와 gen(target) 텍스트를 **각각 독립적으로**, 아래 �
 |---|---|---|---|
 | **텍스트 소스** | `TextSampler`: 영어 단어만(nltk 6개 코퍼스 103,411단어), uni/bigram 빈도 가중 1종 sampler로 style·gen 동일 추첨 | `MixedLineSampler`: 한글0.45/영어0.20/숫자0.20/랜덤음절0.15 혼합 + 구두점·특수기호 부착. **폰트 charset 인지**(못 그리는 글자 미추첨 → tofu 방지) | 한글+숫자+기호 혼합 라인이 목표. 빈도편향 없이 전 음절 노출(랜덤음절) |
 | **style/gen sampler** | 단일 sampler → style·gen 어절수 범위 동일 | style/gen **독립 sampler**(범위 분리 가능: Phase1 2~3/2~3, Phase2 1~8/1~32) | 조건(style)과 타겟(gen) 길이를 따로 통제 |
-| **렌더 방식** | `[style\|gap\|gen]`을 **한 이미지로 합쳐 렌더** → 증강 → 고정 컬럼비로 분할 | style/gen을 **각각 따로 렌더**(경계 없음) | 원본은 회전·warp가 경계를 밀어 style↔gen 침범(잘림/잔상). 분리로 제거 (`korean_split_dataset.py:80-123`) |
+| **렌더 방식** | `[style\|gap\|gen]`을 **한 이미지로 합쳐 렌더** → 증강 → 고정 컬럼비로 분할 | style/gen을 **각각 따로 렌더**(경계 없음) | 원본은 회전·warp가 경계를 밀어 style↔gen 침범(잘림/잔상). 분리로 제거 (`custom_datasets/korean_split.py:80-123`) |
 | **증강 정책** | 합친 이미지에 일괄: RandomRotation·**RandomWarping(TPS 휨)**·Blur·배경·Dilation·ColorJitter(bright=0.05)·**RandomInvert(p=0.2)** | **RandomWarping 완전 제거**, **RandomInvert 비활성**, RandomRotation은 **style만**(gen 곧게), 배경은 **gen 흰색 강제**(style만 종이배경), ColorJitter **brightness=0**. Blur·Dilation·AlphaChannel(잉크)·Jitter는 **RNG 스냅샷으로 style·gen 동일 실현**(같은 writer 질감 매칭) | 모델 `generate()`가 흰배경·곧은 글자를 출력 → 타겟을 그렇게 학습해야 휨/배경이 전파 안 됨. style은 추론 시 실제 필기라 현실 증강 유지 |
 
 - **폰트(writer)**: 원본 font_square 영어 폰트 → **한글 손글씨/디스플레이 폰트 83종**(`assets/fonts_korean_v2/train/`).
@@ -269,7 +269,7 @@ style 참조 이미지의 전사 텍스트. `f"{style_text}<sog>{gen_text}"` 로
 
 ```bash
 # style ref 용 소규모 합성 세트 생성 (lines_json 포맷)
-uv run python gen_korean_fontset.py --per-font-train 5 --per-font-val 0 --out data/ref_set
+uv run python custom_datasets/korean_fontset.py --per-font-train 5 --per-font-val 0 --out data/ref_set
 
 # 생성 결과 그리드: [스타일 ref | 정답 예시 | 생성 cfg=...]
 CUDA_VISIBLE_DEVICES=0 uv run python infer/show.py \
@@ -297,12 +297,12 @@ train/korean_from_en.py    # 영어 pretrained → 한글 직접 (Phase 1 생략
 train/eruku_continous.py   # (원본 repo 스타일 트레이너: wandb/accelerate/webdataset 기반, 참고용)
 train/vae_korean.py        # VAE 한글 적응 finetune (--train-part dec|full, htr/pyramid/logvar 항)
 train/aux_htr.py           # 한글 HTR 리더 finetune (VAE 의 HTR loss + 평가 리더 겸용)
-korean_aux_dataset.py      # HTR 학습용 (라인이미지, 전사) 데이터셋
+custom_datasets/korean_aux.py      # HTR 학습용 (라인이미지, 전사) 데이터셋
 custom_datasets/korean_alphabet.py  # HTR alphabet (assets/korean_charset.json 기반)
 tools/fetch_aux.py         # HTR 학습용 aux 데이터 수집
 # 데이터
-korean_split_dataset.py    # 온라인 한글 split 데이터셋 (+ CLI 샘플 덤프, --show-model-input)
-gen_korean_fontset.py      # 오프라인 라인 생성기 + MixedLineSampler/build_pools (공용)
+custom_datasets/korean_split.py    # 온라인 한글 split 데이터셋 (+ CLI 샘플 덤프, --show-model-input)
+custom_datasets/korean_fontset.py      # 오프라인 라인 생성기 + MixedLineSampler/build_pools (공용)
 assets/download_script/tools_fetch_gf.py  # Google Fonts 수집기 (--lang ko|en, 한/영 통합)
 assets/font_view/render_overview.py       # 폰트 오버뷰 montage (샘플 렌더 + 글자수 분류)
 tools/font_audit.py        # 폰트 품질 감사: 미지원(두부)·malformed 글리프 스캔 (코퍼스 기준)
@@ -331,7 +331,7 @@ experiments/jong_stroke_loss.py  # 종성(받침) 획 손실 — VAE roundtrip �
 experiments/jong_gen_loss.py     # 종성 획 손실 — 생성물을 HTR 로 읽어 자모 단위(삭제/오치환) 측정
 experiments/jong_hypotheses.py   # 위 두 덤프 재분석 — 획 수(H1)/학습 빈도(H2) 가설 검증(GPU 불필요)
 # 모델 / 원본 코드
-eruku_continuous_inf.py    # Emuru 모델 (forward/generate) — style-len 단위버그 수정됨
+models/eruku.py    # Emuru 모델 (forward/generate) — style-len 단위버그 수정됨
 custom_datasets/           # 원본 repo 데이터 코드 (font_square 렌더/증강, tps)
 models/                    # OrigamiNet 등
 docs/                      # 파이프라인 상세/버그 분석 문서 + 재현 스크립트·이미지

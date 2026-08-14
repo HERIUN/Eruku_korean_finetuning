@@ -33,7 +33,7 @@ _spec.loader.exec_module(_mod)
 HanDBKoreanDataset = _mod.HanDBKoreanDataset
 handb_collate = _mod.handb_collate
 
-from eruku_continuous_inf import Emuru
+from models.eruku import Emuru
 
 
 def make_parser():
@@ -197,7 +197,7 @@ def _load_or_build_val_samples(args, out_dir, val_fonts=None):
       (매 run 새로 샘플링하던 문제 제거 = step/run 간 완전히 동일한 val).
     반환: (samples[list of dict], n_val)
     """
-    from korean_split_dataset import make_dataset as _mk, make_english_dataset as _mken
+    from custom_datasets.korean_split import make_dataset as _mk, make_english_dataset as _mken
 
     n_val = args.val_samples if args.val_samples > 0 else args.val_batches * args.batch_size
     en_fonts = args.val_english_fonts_dir or args.english_fonts_dir
@@ -359,11 +359,11 @@ def train(args):
     # ── dataset (max_steps 확정 후 생성: length 가 정확) ──
     train_fonts = val_fonts = None   # None = 폰트 분할 없음(전체 학습 폰트)
     if args.online_split:
-        from korean_split_dataset import make_dataset, split_collate, dump_samples
+        from custom_datasets.korean_split import make_dataset, split_collate, dump_samples
         # 폰트 단위 train/val 분할: val 폰트는 학습에서 제외 → val 이 '본 적 없는 폰트'가 됨.
         # (--val-fonts-dir 지정 시엔 그 디렉토리가 val, 학습은 전체 폰트 사용)
         if not args.val_fonts_dir and args.val_font_frac > 0:
-            from korean_split_dataset import split_train_fonts
+            from custom_datasets.korean_split import split_train_fonts
             train_fonts, val_fonts = split_train_fonts(args.val_font_frac, seed=args.val_seed)
             print(f"폰트 분할: train {len(train_fonts)} / val {len(val_fonts)} "
                   f"(val-font-frac={args.val_font_frac}, seed={args.val_seed}) "
@@ -377,7 +377,7 @@ def train(args):
             seed_off = int(digits) if digits else start_step or 1
         total_len = args.max_steps * args.batch_size * max(1, args.grad_accum)
         if args.english_frac > 0:
-            from korean_split_dataset import make_english_dataset
+            from custom_datasets.korean_split import make_english_dataset
             from torch.utils.data import ConcatDataset
             en_len = int(total_len * args.english_frac)
             ko_len = total_len - en_len
@@ -452,7 +452,7 @@ def train(args):
     val_batches = None
     val_f = None
     if args.online_split and args.val_every > 0:
-        from korean_split_dataset import dump_samples
+        from custom_datasets.korean_split import dump_samples
         val_samples, n_val = _load_or_build_val_samples(args, out_dir, val_fonts=val_fonts)
         # 부분배치(bs 미만)는 forward shape 버그 회피 위해 제외
         val_batches = [collate(val_samples[i:i + args.batch_size])

@@ -95,7 +95,7 @@ if len(txt) > max_len: txt = txt[:max_len]
 - **`GibberishSampler`** (`:318`) — 실제 단어가 아니라 charset에서 문자를 랜덤 추출(공백 확률 16%로 가장 높음). 모델이 "언어"가 아니라 "글자 모양"을 배우게 하는 무의미 문자열용.
 - **`FixedTextSampler`** (`:343`) — 항상 같은 문자열 반환(추론/디버깅용).
 
-> 참고: 이 fork의 한글 버전은 `TextSampler` 대신 `gen_korean_fontset.MixedLineSampler`(한글 음절+영어단어 혼합 라인 샘플러)를 끼워 넣는다(`korean_split_dataset.py:126 build_samplers`). 샘플러만 교체될 뿐 렌더·증강 골격은 동일하다.
+> 참고: 이 fork의 한글 버전은 `TextSampler` 대신 `custom_datasets.korean_fontset.MixedLineSampler`(한글 음절+영어단어 혼합 라인 샘플러)를 끼워 넣는다(`custom_datasets/korean_split.py:126 build_samplers`). 샘플러만 교체될 뿐 렌더·증강 골격은 동일하다.
 
 ---
 

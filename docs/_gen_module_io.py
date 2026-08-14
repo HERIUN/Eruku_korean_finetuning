@@ -26,9 +26,9 @@ HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
 
-from eruku_continuous_inf import pad_images                      # noqa: E402
+from models.eruku import pad_images                      # noqa: E402
 from infer.show import crop_gen, label_img, load_model           # noqa: E402
-from korean_split_dataset import make_dataset, split_collate, to_gray  # noqa: E402
+from custom_datasets.korean_split import make_dataset, split_collate, to_gray  # noqa: E402
 
 OUT = HERE / "img_module_io"
 

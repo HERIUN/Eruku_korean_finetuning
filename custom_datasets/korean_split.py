@@ -1,12 +1,12 @@
 """repo OnlineSplitFontSquare 를 한글로 사용 (온라인 style/gen split 렌더).
 
 - style/gen 텍스트를 각각 다른 단어수 범위로 샘플 (Phase1: 둘 다 2~4 / Phase2: style 1~8, gen 1~32)
-- 한글 mixed-script sampler (gen_korean_fontset.MixedLineSampler 재사용, 전역 covered=폰트 union)
+- 한글 mixed-script sampler (custom_datasets.korean_fontset.MixedLineSampler 재사용, 전역 covered=폰트 union)
 - 폰트별 charset 필터(fonts_charsets.json)로 tofu 방지
 - 무한 온라인 (디스크 0). 학습 샘플 저장은 dump_samples() 사용.
 
 CLI 테스트:
-  python korean_split_dataset.py --n 8 --style 1 8 --gen 2 16 --out /tmp/ksplit
+  python custom_datasets/korean_split.py --n 8 --style 1 8 --gen 2 16 --out /tmp/ksplit
 """
 from __future__ import annotations
 import sys, random, json, argparse
@@ -14,10 +14,10 @@ from pathlib import Path
 import numpy as np, torch, cv2
 from PIL import Image, ImageDraw, ImageFont
 
-HERE = Path(__file__).resolve().parent
+HERE = Path(__file__).resolve().parents[1]   # 저장소 루트
 ASSETS = HERE / "assets"
 sys.path.insert(0, str(HERE))
-import gen_korean_fontset as G
+import custom_datasets.korean_fontset as G
 from custom_datasets.font_square.font_square_split import OnlineSplitFontSquare
 from custom_datasets.font_square import font_transforms_split as FT
 from custom_datasets.font_square import font_transforms as FTN  # 단일 텍스트(비-split) 증강
@@ -307,7 +307,7 @@ if __name__ == "__main__":
     if args.show_model_input:
         # T5 는 config-init(랜덤)이라 가중치 다운로드 없음. 필요한 건 pretrained VAE + get_model_inputs
         # 슬라이스 로직뿐(학습 가중치 무관 = 어떤 ckpt 든 style 잘림 결과 동일).
-        from eruku_continuous_inf import Emuru
+        from models.eruku import Emuru
         dev = "cuda" if torch.cuda.is_available() else "cpu"
         print("loading Emuru (VAE + get_model_inputs) for model-input view ...")
         model = Emuru(t5_checkpoint="google-t5/t5-large",

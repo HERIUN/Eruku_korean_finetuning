@@ -20,7 +20,7 @@ from torchvision import transforms as T
 
 HERE = Path(__file__).resolve().parents[1]   # 저장소 루트
 sys.path.insert(0, str(HERE))
-from eruku_continuous_inf import Emuru
+from models.eruku import Emuru
 
 GOTHIC = str(HERE / "assets" / "fonts_label" / "NanumGothic-Regular.ttf")
 GOTHIC_B = str(HERE / "assets" / "fonts_label" / "NanumGothic-Bold.ttf")

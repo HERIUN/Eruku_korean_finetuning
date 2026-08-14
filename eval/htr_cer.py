@@ -21,7 +21,7 @@ from eval.echo_metrics import build_texts, font_can_render
 from train.aux_htr import load_pretrained_htr, cer as char_cer
 from custom_datasets.korean_alphabet import get_korean_alphabet
 from custom_datasets.subsequent_mask import subsequent_mask
-from korean_aux_dataset import _fit_width
+from custom_datasets.korean_aux import _fit_width
 
 ALPHA = get_korean_alphabet()
 

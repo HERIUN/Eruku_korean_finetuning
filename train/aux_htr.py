@@ -33,7 +33,7 @@ from models.htr import HTR
 from models.smooth_ce import SmoothCrossEntropyLoss
 from models.teacher_forcing import NoisyTeacherForcing
 from custom_datasets.korean_alphabet import get_korean_alphabet
-from korean_aux_dataset import KoreanAuxDataset, aux_collate
+from custom_datasets.korean_aux import KoreanAuxDataset, aux_collate
 
 
 def load_pretrained_htr(path: Path) -> HTR:

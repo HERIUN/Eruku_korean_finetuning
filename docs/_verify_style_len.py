@@ -2,7 +2,7 @@
 패치 전: style ~10~20% (배치최대/8 로 잘림).  패치 후(*8): ~100%.
 """
 import torch
-from eruku_continuous_inf import Emuru
+from models.eruku import Emuru
 
 m = Emuru(); m.eval()
 

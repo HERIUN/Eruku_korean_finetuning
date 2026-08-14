@@ -15,7 +15,7 @@ dilation/erosion) 를 grayscale 단독 구현으로 미러링한다. torch/compi
   - person_key = 폰트 식별자 → 같은 폰트의 다른 이미지가 style/same 페어가 됨
 
 Usage:
-  python gen_korean_fontset.py \
+  python custom_datasets/korean_fontset.py \
       --fonts-dir ../fonts_korean_v2 \
       --corpus ../font_ai_pipeline_work/benchmark/train_lines.json \
       --bg-dir ../font_ai_pipeline_work/bg_textrenderer \
@@ -360,7 +360,7 @@ def save_montage(rows: list[dict], path: Path, n: int = 12):
 
 def main():
     ap = argparse.ArgumentParser()
-    HERE = Path(__file__).resolve().parent
+    HERE = Path(__file__).resolve().parents[1]   # 저장소 루트
     ap.add_argument("--fonts-dir", default=str(HERE / "assets" / "fonts_korean_v2"))
     ap.add_argument("--corpus", default=str(HERE / "assets" / "corpus" / "korean_lines.txt"))
     ap.add_argument("--extra-chars", default=str(HERE / "assets" / "corpus" / "chars.txt"))
