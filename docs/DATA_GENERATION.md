@@ -16,7 +16,7 @@ Eruku(=Emuru 계열)는 **손글씨/폰트 스타일 전이(style transfer)** �
 
 | 경로 | 사용처 | 설명 |
 |------|--------|------|
-| **미리 렌더된 WebDataset** | 원본 대규모 사전학습(`train_eruku_continous.py`) | `font-square-pretrain-20M/{000000..002291}.tar` (2,292개 shard, 약 2천만 샘플)을 `wds.WebDataset`으로 읽음. 이미 렌더·증강된 PNG가 tar 안에 들어있음 |
+| **미리 렌더된 WebDataset** | 원본 대규모 사전학습(`train/eruku_continous.py`) | `font-square-pretrain-20M/{000000..002291}.tar` (2,292개 shard, 약 2천만 샘플)을 `wds.WebDataset`으로 읽음. 이미 렌더·증강된 PNG가 tar 안에 들어있음 |
 | **온라인 합성 (OnlineFontSquare)** | 그 20M tar를 **만드는 원천 로직** / 파인튜닝 / 소규모 실험 | `custom_datasets/font_square/` 의 Dataset이 `__getitem__` 호출 때마다 즉석에서 텍스트 샘플링 → 폰트 렌더 → 증강 |
 
 즉 tar는 결국 `OnlineFontSquare(_Split)` 파이프라인의 출력을 캐싱한 것이다.
@@ -195,7 +195,7 @@ ds = OnlineSplitFontSquare(
 - 부수 캐시: `fonts_sizes.json`(폰트별 캘리브 크기), `fonts_charsets.json`(폰트별 지원 문자).
 - `length`를 크게 주면 `font_id = idx % 폰트수`로 폰트를 계속 순환하며 매번 새로운 텍스트/증강 조합을 뽑으므로 사실상 **무한 데이터**가 된다.
 
-원본 대규모 사전학습은 위 파이프라인 출력을 미리 렌더해 `*.tar`(WebDataset) 2,292개로 저장해 두고, `train_eruku_continous.py`가 `wds.WebDataset(TRAIN_PATTERN).decode("pil")`로 읽어 배치(BATCH_SIZE=32, grad-accum으로 유효 256)로 학습한다.
+원본 대규모 사전학습은 위 파이프라인 출력을 미리 렌더해 `*.tar`(WebDataset) 2,292개로 저장해 두고, `train/eruku_continous.py`가 `wds.WebDataset(TRAIN_PATTERN).decode("pil")`로 읽어 배치(BATCH_SIZE=32, grad-accum으로 유효 256)로 학습한다.
 
 ---
 

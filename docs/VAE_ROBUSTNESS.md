@@ -34,7 +34,7 @@ full_mse VAE + 단문강조 재적응으로 **폰트-렌더 입력**의 한글 �
   한 번 뽑아 **rgb 입력과 bw 타깃이 공유**하도록. 단 VAE 가 바뀌면 latent 이동 → Eruku 재적응 필요.
 - **대안**: 원본 emuru VAE 는 이미 농담보존 + real-HW 복원이 우수 → 재설계 대신 **원본 유지** 또는
   매우 약한 finetune 도 선택지.
-- 진단도구: `experiments/_eval_vae_hw_recon.py`(실제 HW 복원 MSE/SSIM), `scratchpad/vae_sharpen.py`(농도 snap 테스트).
+- 진단도구: `experiments/vae_hw_recon.py`(실제 HW 복원 MSE/SSIM), `scratchpad/vae_sharpen.py`(농도 snap 테스트).
 
 ---
 
@@ -55,9 +55,9 @@ T5 조건이 OOD → runaway(EOG 못 뱉음)/blank.
   (`bthr<215`), 텍스트 밀도는 진하게(`thr<180`).
 - **검증**: mirror montage 에서 밀도 bbox 적용 시 4모델 × 8샘플 **32/32 전부 legible**
   (단순 bbox 는 line_008 만 실패 → 밀도 bbox 로 6.78% 생성 회복).
-- 구현: `experiments/_eval_mirror_compare.py`(`bbox_crop_gray` 밀도기반, `--bbox-crop` 기본 on).
+- 구현: `experiments/mirror_compare.py`(`bbox_crop_gray` 밀도기반, `--bbox-crop` 기본 on).
   진단 scratchpad: `diag_bbox.py` / `diag_robust_bbox.py` / `diag_l008.py`.
-- ⚠️ **미결**: 정식 추론경로(`infer_show.load_style` 및 eval 스크립트들)에 이 bbox 크롭을 baked-in 할지
+- ⚠️ **미결**: 정식 추론경로(`infer.show.load_style` 및 eval 스크립트들)에 이 bbox 크롭을 baked-in 할지
   아직 미적용 — 현재는 mirror montage 에만 들어있다.
 
 ### 왜 bbox 크롭이 통하나 — 학습 갭
@@ -75,7 +75,7 @@ bbox 크롭이 통하는 근본 이유 = 추론 입력을 이 학습분포(텍�
 ### runaway 는 "unseen 스타일" 이 아니라 "실제 스캔 특성(저대비·얇음·노이즈)" 특정
 
 held-out AI손글씨 폰트 4종(`assets/custom_hw_fonts`, **평가전용**) 생성은 runaway 없이 전부 legible
-(`experiments/_eval_gen_heldout.py`, montage `finetune_runs/eruku_short_fullmse/_eval/gen_heldout_fonts.png`).
+(`experiments/gen_heldout.py`, montage `finetune_runs/eruku_short_fullmse/_eval/gen_heldout_fonts.png`).
 폰트-렌더(고대비)는 held-out 이어도 잘 된다 → 문제는 **스타일 신규성이 아니라 입력분포(스캔 vs 렌더)** 다.
 
 ---

@@ -1,7 +1,7 @@
 """Eruku 한글 학습용 오프라인 데이터셋 생성기.
 
 폰트 = writer 1명 (person_key) 으로 매핑해서, 폰트마다 여러 개의 한글 라인
-이미지를 렌더 + 증강 후 디스크에 저장하고, train_core.py(--lines-json) 가 그대로 읽는
+이미지를 렌더 + 증강 후 디스크에 저장하고, train/core.py(--lines-json) 가 그대로 읽는
 lines_json (`[{image_path, text, person_key}]`) 을 만든다.
 
 증강은 Eruku/font_square FT 파이프라인과 같은 *종류* (TPS 류 elastic warp,
@@ -336,7 +336,7 @@ def gen_split(fonts: list[Path], pools: dict, bgs: list[np.ndarray],
                 "type": "라인(폰트합성)",
                 "person_key": person_key,
                 "image_path": str(img_path.resolve()),
-                "font_path": str(fp.resolve()),   # 정답칸 렌더용 (infer_show 가 사용)
+                "font_path": str(fp.resolve()),   # 정답칸 렌더용 (infer.show 가 사용)
             })
             made += 1
         print(f"  [{fi+1}/{len(fonts)}] {person_key}: {made} imgs (ko={len(ko_cov)} en={len(en_cov)})")

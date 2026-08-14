@@ -96,7 +96,7 @@ AFTER : sl=504px → latent 63/63 열 사용 = 504px (100%)
 ---
 
 ## 원본 repo 는 왜 멀쩡했나
-원본 `train_eruku_continous.py` 는 collate 에서 style 을 **고정 8192px** 로 패딩한다:
+원본 `train/eruku_continous.py` 는 collate 에서 style 을 **고정 8192px** 로 패딩한다:
 ```python
 def pad_images_fixed(images, max_width=Config.MAX_IMG_LEN=8192, padding_value=1):
     ...  # 부족하면 8192 까지 pad, 넘치면 crop
@@ -104,7 +104,7 @@ def pad_images_fixed(images, max_width=Config.MAX_IMG_LEN=8192, padding_value=1)
 → `style_img_embeds.shape[-1] = 8192/8 = 1024`. 정상 폭(수백 px)의 `sl` 은 1024 보다 작으므로
 `min(sl, 1024)=sl` → **clamp 안 걸림 → full style 사용**.
 
-즉 원본은 **잘못된 단위 항을 고정 8192 패딩으로 "덮어" 두었을 뿐**이고, 이 포크가 패딩을 배치최대(가변 list → 내부 `pad_images`)로 바꾸면서 그 가림막이 사라져 버그가 드러났다. (`get_model_inputs` 는 학습 `train_core.py` 와 추론 양쪽에서 쓰이므로 둘 다 영향.)
+즉 원본은 **잘못된 단위 항을 고정 8192 패딩으로 "덮어" 두었을 뿐**이고, 이 포크가 패딩을 배치최대(가변 list → 내부 `pad_images`)로 바꾸면서 그 가림막이 사라져 버그가 드러났다. (`get_model_inputs` 는 학습 `train/core.py` 와 추론 양쪽에서 쓰이므로 둘 다 영향.)
 
 | | style 패딩 | latent 폭 | `min` 결과 | style 사용 |
 |---|---|---|---|---|

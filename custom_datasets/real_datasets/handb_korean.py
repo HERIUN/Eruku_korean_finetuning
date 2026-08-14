@@ -96,7 +96,7 @@ class HanDBKoreanDataset(Dataset):
 def handb_collate(batch: list[dict]) -> dict:
     """Eruku 의 HFDataCollector 비슷한 collate — 가변 길이 image 라 list 로만 모음.
 
-    HanDB 내부 role 'same'(같은 필적의 다른 샘플) = 생성 타깃이므로, train_core 계약에는
+    HanDB 내부 role 'same'(같은 필적의 다른 샘플) = 생성 타깃이므로, train.core 계약에는
     `gen_*` 키로 노출한다(same_img→gen_img 등). 'style' 등 나머지 키는 그대로.
     """
     out: dict = {}

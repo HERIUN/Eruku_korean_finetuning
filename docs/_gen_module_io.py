@@ -1,6 +1,6 @@
 """docs/MODULE_IO.md 용 그림 생성 — "학습 모듈에 뭐가 들어가고 뭐가 나오는가" 를 실제 이미지로.
 
-학습 루프(train_core.train)와 **완전히 같은 호출**(split_collate → get_model_inputs → forward)을
+학습 루프(train.core.train)와 **완전히 같은 호출**(split_collate → get_model_inputs → forward)을
 한 배치에 대해 돌리고, 각 단계의 텐서를 이미지로 저장한다.
 
 재현:
@@ -27,7 +27,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(ROOT))
 
 from eruku_continuous_inf import pad_images                      # noqa: E402
-from infer_show import crop_gen, label_img, load_model           # noqa: E402
+from infer.show import crop_gen, label_img, load_model           # noqa: E402
 from korean_split_dataset import make_dataset, split_collate, to_gray  # noqa: E402
 
 OUT = HERE / "img_module_io"

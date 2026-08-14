@@ -5,7 +5,7 @@
   - 3..166: FONT_SQUARE_CHARSET(라틴 164) ← 원본 emuru HTR(alphabet_size=167)과 **동일 인덱스**
   - 167.. : 코퍼스 등장 한글음절(정렬)         ← 새로 append (embedding/fc 확장분)
 따라서 앞 167 인덱스는 pretrained HTR 과 일치 → text_embedding/fc 의 라틴 행을 그대로 전이하고
-한글 행만 새로 학습(train_aux_htr.py 의 expand_htr_vocab 참조).
+한글 행만 새로 학습(train/aux_htr.py 의 expand_htr_vocab 참조).
 
 한글 집합은 **코퍼스에 실제 등장하는 음절**로 짓는다(실측 ≈2,345자, 상위 2000 이 99.9% 커버).
 현대 한글 전체 11,172자 중 나머지는 코퍼스에 없어 dead class → 제외. 결정된 charset 은

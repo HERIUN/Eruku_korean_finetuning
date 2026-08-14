@@ -3,7 +3,7 @@
 > `models/autoencoder_loss.py`의 `nll / exp(log_var) + log_var` 항. **논문(emuru)엔 없음.**
 > 원본 코드가 물려받은 **LDM/CompVis(Stable Diffusion AE) 관례**이며, 뿌리는
 > Kendall & Gal의 *learned observation uncertainty(homoscedastic)* 다.
-> `train_vae_korean.py`에서는 `--logvar-weighting` 플래그로 켠다(기본 off).
+> `train/vae_korean.py`에서는 `--logvar-weighting` 플래그로 켠다(기본 off).
 
 ---
 
@@ -132,7 +132,7 @@ Adam이 `lr=1e-4` 로 log_var를 스텝당 ~1e-4씩만 끌어내려 **15000 step
 | RUN 1 control (no logvar) | `run_logvar_clean.sh` | `finetune_runs/vae_orig_pureL1` |
 | RUN 2 treatment (`--logvar-weighting`) | `run_logvar_clean.sh` | `finetune_runs/vae_orig_pureL1_logvar` |
 
-roundtrip MSE ↓ / SSIM ↑, `experiments/_eval_vae_recon.py`, s15000:
+roundtrip MSE ↓ / SSIM ↑, `experiments/vae_recon.py`, s15000:
 
 | lang | orig(emuru) | ctrl (no logvar) | **logvar** | logvar vs ctrl |
 |---|---|---|---|---|

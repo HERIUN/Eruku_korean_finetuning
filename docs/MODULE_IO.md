@@ -3,7 +3,7 @@
 이 문서는 Eruku를 **하나의 학습 모듈(black box)** 로 봤을 때 필요한 입력·나오는 출력을
 실제 텐서와 실제 렌더링 이미지로 보여준다.
 
-모든 그림·수치는 `docs/_gen_module_io.py` 가 **학습 루프(`train_core.train`)와 완전히 같은 호출**
+모든 그림·수치는 `docs/_gen_module_io.py` 가 **학습 루프(`train.core.train`)와 완전히 같은 호출**
 (`split_collate` → `get_model_inputs` → `forward`)을 한 배치에 돌려 생성한 것이다.
 
 ```bash
@@ -85,7 +85,7 @@ gen_text   = "곳 Pierro… 껄"                gen_img   [3, 64, 379]   gen_img
 
 ### (2) 추론 땐 `gen_img` 자체가 없다
 
-생성 시 호출은 이렇다 (`infer_show.py:254`):
+생성 시 호출은 이렇다 (`infer/show.py:254`):
 
 ```python
 mi = model.get_model_inputs([style_img], None, style_len=W, gen_len=None, max_img_len=2048)
@@ -112,7 +112,7 @@ gl = max(64, min(gl, gen_img_embeds.shape[-1] * 8, remaining))
 ```
 
 style이 예산을 다 먹어 gen 꼬리가 잘리면 모델이 EOG 위치를 잘못 배운다(= 조기 종료/문장 미완성).
-`train_core.truncation_reason()` (`train_core.py:120`) 이 **같은 계산을 미리 돌려** 잘릴 샘플을
+`train.core.truncation_reason()` (`train/core.py:120`) 이 **같은 계산을 미리 돌려** 잘릴 샘플을
 학습에서 아예 drop 하고 `truncated_samples.csv` 에 기록한다.
 
 > ⚠️ **단위 함정**: `sl`/`gl` 은 **픽셀**, `*_img_embeds.shape[-1]` 은 **latent 폭(=픽셀/8)** 이다.
@@ -215,13 +215,13 @@ losses, pred_latent = model.forward(
 > ⚠️ 눈에 보이는 열화의 **대부분은 VAE의 결정적 재구성 한계가 아니라 KL posterior 샘플링
 > 노이즈**다(9.3배 차이). `_img_encode` 는 `.latent_dist.sample()` 을 쓰는데
 > (`eruku_continuous_inf.py:188`, 원본 Emuru/LDM 관례) **repo의 VAE 측정 스크립트는 전부
-> `.mode()`** 를 쓴다(`docs/_vae_capacity.py:41`, `experiments/_common.py:62`, …).
+> `.mode()`** 를 쓴다(`docs/_vae_capacity.py:41`, `experiments/common.py:62`, …).
 > 즉 문서화된 "VAE 한글 재구성 한계" 수치는 **모델이 실제로 받는 것보다 깨끗한 경로**를 잰 값이다.
 >
 > 추론 때 `_img_encode` 를 `.mode()` 로 바꿔 style prefix 노이즈를 없애면 어떨까 — 3샘플로
 > A/B 해본 결과 **결론이 안 났다**: 한 샘플은 `.mode()` 가 문장을 끝까지 쓴 반면(`. sample()` 은
 > 조기 EOG), 다른 샘플은 정반대였다. 선명도가 체계적으로 좋아지지도 않았다. 판단하려면
-> `eval_htr_cer.py` 로 제대로 재야 한다 — **아직 안 했다.**
+> `eval/htr_cer.py` 로 제대로 재야 한다 — **아직 안 했다.**
 
 정답 열을 매 스텝 다시 넣어주므로(teacher forcing) 이 그림과 학습 loss는 실제 생성 품질보다
 항상 낙관적이다. 실제 성능은 §6 자기회귀 생성으로 봐야 한다.
@@ -300,7 +300,7 @@ model.dropout_probability = 0.05  # CFG 용 text dropout
 model.drop_text = True
 
 for sample in dl:
-    sample, dropped = filter_no_truncation(sample, max_img_len)   # train_core.py:139, truncation 금지 정책
+    sample, dropped = filter_no_truncation(sample, max_img_len)   # train/core.py:139, truncation 금지 정책
     mi = model.get_model_inputs(sample["style_img"], sample["gen_img"],
                                 sample["style_img_len"], sample["gen_img_len"], max_img_len)
     losses, _ = model.forward(decoder_inputs_embeds_vae=mi["decoder_inputs_embeds"].cuda(),
@@ -310,7 +310,7 @@ for sample in dl:
     ...
 ```
 
-실제 루프(grad accum, resume, val, 샘플 덤프, config 기록 포함)는 `train_core.py:251~` 참고.
+실제 루프(grad accum, resume, val, 샘플 덤프, config 기록 포함)는 `train/core.py:251~` 참고.
 
 ### 학습되는 파라미터 / 동결되는 것
 
@@ -319,7 +319,7 @@ for sample in dl:
 | T5-large (encoder + decoder) | **학습** |
 | `query_emb` / `t5_to_vae` / `t5_to_special` (latent↔d_model 선형층) | **학습** |
 | `sos` / `sog` / `eog` / `uncond_embedding` | **학습** |
-| VAE (`emuru_vae`) | **동결** (`set_training(self.vae, False)`) — 별도 `train_vae_korean.py` 로만 건드림 |
+| VAE (`emuru_vae`) | **동결** (`set_training(self.vae, False)`) — 별도 `train/vae_korean.py` 로만 건드림 |
 | OrigamiNet OCR | 로드조차 안 함 (`alpha=1.0`) |
 
 ---
@@ -330,5 +330,5 @@ for sample in dl:
 - [`PIPELINE_STEP_BY_STEP.md`](PIPELINE_STEP_BY_STEP.md) — 렌더→증강→split 단계별 이미지
 - [`STYLE_LEN_BUG.md`](STYLE_LEN_BUG.md) — `style_len` 픽셀↔latent 단위 버그
 - [`VAE_ROBUSTNESS.md`](VAE_ROBUSTNESS.md) — 출력 품질의 하드 상한(VAE 재구성 한계)
-- 하이퍼파라미터 전체 목록: `train_core.py:make_parser()` (라인 42~115),
-  레시피는 `train_phase1.py:17` / `train_phase2.py:20` / `train_korean_from_en.py:23`
+- 하이퍼파라미터 전체 목록: `train/core.py:make_parser()` (라인 42~115),
+  레시피는 `train/phase1.py:17` / `train/phase2.py:20` / `train/korean_from_en.py:23`

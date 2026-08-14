@@ -9,7 +9,7 @@
 - 기준 모델: `finetune_runs/eruku_short_fullmse/checkpoint_step_030000.pth` (T5) +
   ckpt 내장 VAE(= `finetune_runs/vae_korean_full_mse/vae_s28000`)
 - 리더: `finetune_runs/aux_htr_ko/htr_s20000`
-- 측정 스크립트: `experiments/_eval_jong_stroke_loss.py`, `experiments/_eval_jong_gen_loss.py`
+- 측정 스크립트: `experiments/jong_stroke_loss.py`, `experiments/jong_gen_loss.py`
 
 ## 용어
 
@@ -133,7 +133,7 @@
 
 ## 검증 1 — H1(획 수) / H2(학습 빈도), VAE 측
 
-재분석 스크립트: `experiments/_eval_jong_hypotheses.py` (새 생성 없음, 측정 1 의 음절별 덤프만 사용).
+재분석 스크립트: `experiments/jong_hypotheses.py` (새 생성 없음, 측정 1 의 음절별 덤프만 사용).
 음절 1,440종 (측정 1 에서 표본 20개 이상 모인 음절).
 
 **획 수 정의**: 자모별 표준 획수 합(ㄱ1 ㄴ1 ㄷ2 ㄹ3 ㅁ3 ㅂ4 ㅅ2 ㅇ1 ㅈ2 ㅊ3 ㅋ2 ㅌ3 ㅍ4 ㅎ3,
@@ -357,7 +357,7 @@ balanced(OOD) 격차 −0.20 vs coherent(자연) 격차 없음(n=13). **개입�
 
 - 코퍼스에서 **겹받침을 포함한 실제 단어**만 뽑아 문장을 구성 (랜덤 음절 나열이 아님)
 - 한 라인 = 겹받침 단어 2개 + 일반 단어 2개 → **대조군이 같은 이미지에서** 나온다
-  (폰트·스타일 교란 제거). 구현: `_eval_jong_gen_loss.py --texts natural_jong`
+  (폰트·스타일 교란 제거). 구현: `jong_gen_loss.py --texts natural_jong`
 - 목표 겹받침 음절 표본 ≥300
 - 산출: "실제 어휘 조건에서 겹받침 격차 X%p" — 이게 개입 성공의 **상한 기대치**다
 - 비용: 배치+KV 캐시로 ~7.5초/샘플 → 250 텍스트 ≈ 30분
@@ -450,7 +450,7 @@ C1 보다 침습적이므로 C1 이 실패했을 때만.
 
 ### C4. HTR 보조 손실 (alpha < 1.0) — 최후
 
-`train_core.py` 가 이미 `alpha<1.0` + `ocr_checkpoint` 를 지원한다. 한글 HTR 을 리더로 걸어
+`train/core.py` 가 이미 `alpha<1.0` + `ocr_checkpoint` 를 지원한다. 한글 HTR 을 리더로 걸어
 생성 이미지가 읽히도록 직접 감독한다.
 
 **리스크 큼**: VAE 학습에서 HTR 가중은 **일관되게 해로웠다**(README loss ablation:
@@ -565,7 +565,7 @@ R² = 0.100 (겹받침 더미만 쓰던 이전 모델의 0.058 에서 개선).
 
 ## 기록: 기준선 (개선 전)
 
-`eval_htr_cer.py` n=100, cfg=1.0, coherent (2026-08 재측정):
+`eval/htr_cer.py` n=100, cfg=1.0, coherent (2026-08 재측정):
 
 | 지표 | 값 |
 |---|---|

@@ -7,12 +7,12 @@
 기호=유니코드 카테고리 P(문장부호)/S(기호), 기타=나머지(타 문자권·공백·제어 등).
 글자수는 cmap 매핑 중 **실제 글리프가 유의미한 것만** 유효로 집계. cmap 만 믿으면 가짜 지원이
 잡히므로 두 가지를 걸러 별도 표기:
-  - 빈글리프: 렌더 시 잉크가 전혀 없음 (mask bbox 기준, tools_font_audit 과 동일)
+  - 빈글리프: 렌더 시 잉크가 전혀 없음 (mask bbox 기준, tools.font_audit 과 동일)
   - tofu: 잉크는 있지만 **동일 비트맵이 TOFU_MIN(10)자 이상에 재사용**되는 placeholder
     (두부 박스는 보통 한 글리프를 수백~수천 codepoint 에 alias → 비트맵 해시로 탐지.
      대소문자 alias 같은 정상 재사용은 글리프당 2~4자라 threshold 미만)
 (공백·제어문자는 원래 잉크가 없으므로 검사 없이 '기타'로 집계. 잔여 한계: 글자마다 다른
-모양으로 깨진 글리프는 못 잡음 → 기하 이상 검사는 tools_font_audit.py 사용)
+모양으로 깨진 글리프는 못 잡음 → 기하 이상 검사는 tools/font_audit.py 사용)
 
 사용:
   .venv/bin/python assets/font_view/render_overview.py            # 전 폴더 → assets/font_view/*.png

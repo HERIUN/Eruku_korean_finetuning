@@ -205,7 +205,7 @@ def make_english_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, see
 
 
 def split_collate(batch):
-    """split 데이터셋(style_img/gen_img/...) → train_core 형식(style_img/gen_img + len + text)."""
+    """split 데이터셋(style_img/gen_img/...) → train.core 형식(style_img/gen_img + len + text)."""
     return {
         "style_img": [b["style_img"] for b in batch],
         "gen_img": [b["gen_img"] for b in batch],
