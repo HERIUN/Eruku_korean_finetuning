@@ -15,7 +15,7 @@
 """
 from __future__ import annotations
 import argparse, json, random
-from collections import defaultdict
+from collections import Counter, defaultdict
 from pathlib import Path
 
 import numpy as np
@@ -106,8 +106,12 @@ def is_syl(c):
     return c is not None and 0xAC00 <= ord(c) <= 0xD7A3
 
 
-def tally(gt_text, hyp, acc, tag, per_syl=None):
-    """정렬 후 GT 음절별로 종성 처리 결과를 센다. per_syl 주면 음절별 정확도도 누적(H2 회귀용)."""
+def tally(gt_text, hyp, acc, tag, per_syl=None, conf=None):
+    """정렬 후 GT 음절별로 종성 처리 결과를 센다.
+
+    per_syl 주면 음절별 정확도도 누적(H2 회귀용).
+    conf 주면 자모 혼동쌍도 누적: conf[(tag, 위치, GT자모, 읽힌자모)] += 1.
+    """
     for g, h in align(norm(gt_text), norm(hyp)):
         if not is_syl(g):
             continue
@@ -126,6 +130,11 @@ def tally(gt_text, hyp, acc, tag, per_syl=None):
                 r["jong_del"] += 1              # 종성도 같이 소실 (보수적으로 삭제로 셈)
             continue
         ch, vh, jh = decompose(h)
+        if conf is not None:
+            conf[(tag, "초성", cg, ch)] += 1
+            conf[(tag, "중성", vg, vh)] += 1
+            if jg or jh:
+                conf[(tag, "종성", jg or "∅", jh or "∅")] += 1
         r["exact"] += int(g == h)
         r["cho_err"] += int(ch != cg)
         r["jung_err"] += int(vh != vg)
@@ -177,6 +186,7 @@ def main():
 
     acc = defaultdict(lambda: defaultdict(int))
     per_syl = defaultdict(lambda: defaultdict(int))   # 생성 경로 음절별 정확도 (H2 회귀용)
+    conf = Counter()                                  # (tag, 위치, GT자모, 읽힌자모) → 횟수
 
     # 폰트 배정을 먼저 끝내고 배치로 묶는다. generate_batch 의 스텝 수는 '가장 늦게 EOG 를
     # 내는 샘플'이 정하므로, 길이가 비슷한 것끼리 묶어야 낭비가 적다 → 텍스트 길이로 정렬.
@@ -201,7 +211,7 @@ def main():
                           ("VAE복원", recs), ("생성", gens)):
             batch = torch.cat([to_htr_input(im, dev) for im in imgs], 0)
             for (text, _), hyp in zip(chunk, htr_read(htr, batch, dev)):
-                tally(text, hyp, acc, tag, per_syl=per_syl if tag == "생성" else None)
+                tally(text, hyp, acc, tag, per_syl=per_syl if tag == "생성" else None, conf=conf)
         done += len(chunk)
         print(f"  {done}/{len(jobs)}", flush=True)
 
@@ -225,6 +235,31 @@ def main():
         r0 = acc.get((tag, "없음"))
         if r0 and r0["n"]:
             print(f"{'(참고) 종성없음 음절에 종성이 생긴 비율':46s} {r0['jong_ins']/r0['n']:.3f}")
+
+    # ── 자모 혼동: '획 하나 차이' 부류가 정말 더 틀리나 ──────────────────────────
+    # 쌍자음(ㄱ→ㄲ)·y계 이중모음(ㅏ→ㅑ)은 기본형에 획을 하나 더한 꼴이라, 획이 뭉개지면
+    # 서로 섞인다는 가설. 리더 바닥(GT렌더)과 같이 봐야 리더 오차와 구분된다.
+    PAIRS = {"쌍자음 ㄲㄸㅃㅆㅉ": ("초성", set("ㄲㄸㅃㅆㅉ")),
+             "평자음(대조군)": ("초성", set("ㄱㄷㅂㅅㅈ")),
+             "y계 모음 ㅑㅕㅛㅠ": ("중성", set("ㅑㅕㅛㅠ")),
+             "기본 모음 ㅏㅓㅗㅜ(대조군)": ("중성", set("ㅏㅓㅗㅜ"))}
+    print("\n=== 자모 혼동 (획 하나 차이 부류) ===")
+    print(f"{'부류':26s} " + " ".join(f"{t:>18s}" for t in ("GT렌더(리더바닥)", "VAE복원", "생성")))
+    for label, (pos, members) in PAIRS.items():
+        cells = []
+        for tag in ("GT렌더(리더바닥)", "VAE복원", "생성"):
+            tot = sum(c for (t, p, g, _), c in conf.items() if t == tag and p == pos and g in members)
+            err = sum(c for (t, p, g, h), c in conf.items()
+                      if t == tag and p == pos and g in members and h != g)
+            cells.append(f"{err/tot:.3f}(n={tot})" if tot else "-")
+            if tag == "생성" and tot:
+                out[f"혼동|{label}"] = [err / tot, tot]
+        print(f"{label:26s} " + " ".join(f"{c:>18s}" for c in cells))
+    print("\n생성 경로 혼동쌍 상위 12 (GT자모 → 읽힌자모, 같은 위치):")
+    top = [(c, p, g, h) for (t, p, g, h), c in conf.items() if t == "생성" and g != h]
+    for c, p, g, h in sorted(top, reverse=True)[:12]:
+        print(f"  {p} {g} → {h}   {c}회")
+    out["혼동쌍_생성"] = {f"{p}|{g}|{h}": c for c, p, g, h in sorted(top, reverse=True)[:40]}
 
     # 음절별 생성 정확도 — 학습 빈도/획 수와의 상관 분석(jong_hypotheses.py)에 쓴다
     out["per_syllable"] = {ch: [v["exact"] / v["n"], v["jong_ok"] / v["n"], v["n"]]
