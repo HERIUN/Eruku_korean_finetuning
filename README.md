@@ -29,6 +29,18 @@ generation, [arxiv 2510.23240](https://arxiv.org/abs/2510.23240)) 를 **한글 �
 (자세히는 아래 「추론 파라미터」 절). `style_text` 를 채우면
 모델이 style 을 이어 그리므로 크롭은 반드시 SOG 기준이어야 한다 — 저장소 코드와 HF 발행본 모두 반영돼 있다.
 
+## 모델 한 장 요약
+
+![Eruku I/O overview](docs/eruku_io_overview.png)
+
+**픽셀을 직접 뱉지 않는다.** 높이 64px 라인 이미지[3,64,W]를 동결 VAE 로 가로,세로로 8배 줄인 latent[1,8,W/8]에서
+가로 한 열(=원본 8px)을 **토큰 하나**로 보고 T5 디코더가 다음 열을 autoregressive 하게(until EOG) 회귀한다(생성 이미지는 추론단계에서 VAE decoder 가
+만든다 학습때는 vae_decoder사용되지 않음). 텍스트는 cross-attention **조건**, 이미지 latent 는 디코더 **입력 시퀀스 그 자체** — 별도
+style encoder 가 없고 필체는 이어 쓸 prefix 다. loss 는 latent MSE + special CE 둘뿐이라 학습 중
+`vae.decode` 는 아예 안 돈다(출력 화질의 하드 상한이 T5 가 아니라 VAE 인 이유).
+그림의 빨간 줄이 디코더 입력 시퀀스이자 GT 이고, 빨강/회색 구분은 **MSE 기준**이다 — CE 는
+회색(SOG/EOG/pad)까지 전 위치에 걸린다. 상세는 [`docs/MODULE_IO.md`](docs/MODULE_IO.md).
+
 ## 빠른 시작
 
 ```bash

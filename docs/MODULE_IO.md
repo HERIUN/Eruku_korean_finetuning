@@ -26,6 +26,35 @@ Eruku는 픽셀을 직접 뱉지 않는다. 64px 높이 라인 이미지를 VAE�
 가로 방향 한 열(=원본 8px)을 **토큰 하나**로 보고 T5 디코더가 **다음 열을 autoregressive 하게 예측**한다.
 픽셀 이미지는 마지막에 VAE decoder가 만든다.
 
+![overview](eruku_io_overview.png)
+
+그림에서 읽을 것 — **두 정답의 출처가 다르다.** MSE 정답은 VAE encoder 의 **출력값**(latent 텐서
+그 자체, §5.1 ①), CE 정답은 VAE encoder 에 들어간 이미지의 **폭**(`*_img_len` 으로 기계적으로
+찍는 라벨, §4)이다. 가운데 빨간 줄이 그 둘의 공통 대상인 **디코더 입력 시퀀스**
+(`forward` 의 `decoder_inputs_embeds_vae`, `models/eruku.py:262`)이고, 이 시퀀스가 곧 GT 다 —
+입력에 `SOS` 를 앞에 붙이고 출력에서 마지막 한 칸을 버려 한 칸 밀린 정렬을 만든다(§5).
+줄에 `[SOS]` 가 없는 건 SOS 가 `query_emb` **이후** d_model 공간에서 붙기 때문이다(`:291`).
+
+**범례의 빨강/회색은 MSE 기준이다.** MSE 는 `specials == 2` 인 style/gen latent 열만 보고
+SOG/EOG/pad 는 마스크로 뺀다(`:314`). 반면 **CE 는 마스크가 없어 전 위치에 걸린다**(`:312`) —
+회색 구간도 `SOG`/`EOG` 라벨로 감독되고, 패딩까지 `EOG` 로 학습된다(`pad_sequence(padding_value=1)`,
+`:234`). 즉 회색은 "감독 안 함" 이 아니라 "**latent 값 대신 라벨로만** 감독" 이다.
+
+그리고 되먹임 점선이 `query_emb` 지점으로 합류하는 것도 실제 코드 그대로다 —
+학습의 style/gen latent(`models/eruku.py:274`), 추론의 style prefix(`:428`), 추론의 자기 출력
+되먹임(`:496`)이 **같은 `Linear(8, 1024)` 하나**를 탄다. 그래서 `t5_to_vae` 의 출력이 VAE latent 와
+같은 8차원 공간이어야 한다(§6).
+
+오른쪽 아래 `pixel crop [SOG+1:]` 는 **순서**가 핵심이다. VAE decoder 에는 style prefix 까지
+**붙여서** 넣고(`:507`), 자르는 건 그 다음 **픽셀 공간**에서다(`infer/show.py:100`). latent 에서
+미리 자르면 생성분 첫 열이 왼쪽 문맥을 잃는다. `+1` 은 SOG 도 latent 한 열(=8px)을 차지하기
+때문이고, 빼먹으면 결과 왼쪽에 8px 이 남는다.
+
+> 그림이 생략한 것 둘: (1) 되먹임 루프의 종료 신호 `until EOG` 는 latent 가 아니라 위쪽
+> **special head 예측**에서 나온다(SOG 를 뽑으면 latent 대신 학습된 `sog` 임베딩이 들어간다,
+> `:494-496`). (2) 입력에는 `style_img_len` / `gen_img_len` / `max_img_len` 도 함께 들어가며,
+> 이 셋이 곧 CE 정답을 만드는 재료다(§2).
+
 ---
 
 ## 1. 학습 모듈이 요구하는 입력

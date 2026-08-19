@@ -101,7 +101,7 @@ def main():
         _label_row(f"style_img  [3,64,{si.shape[1]}]  style_text = '{s0['style_text']}'",
                    max(si.shape[1], 700), bold=True),
         _bgr(si),
-        _label_row(f"gen_img (=GT)  [3,64,{gi.shape[1]}]  gen_text = '{s0['gen_text']}'",
+        _label_row(f"gen_img  [3,64,{gi.shape[1]}]  gen_text = '{s0['gen_text']}'",
                    max(gi.shape[1], 700), bold=True),
         _bgr(gi),
     ]
