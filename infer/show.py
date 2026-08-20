@@ -207,12 +207,6 @@ def load_model(ckpt, device, vae_checkpoint=None):
         print(f"[load_model] vae swapped -> {vae_ck} (ckpt vae.* {n_before - len(st)}키 strip)")
     model.load_state_dict(st, strict=False)
     model.drop_text = True
-    # 자모 분해 텍스트 조건(C1)은 A/B 에서 기각돼 제거됐다(docs/JONGSEONG_STROKE_LOSS.md 실험 1).
-    # 그 옵션으로 학습된 옛 ckpt 는 지금 코드로 추론하면 조건이 달라 조용히 틀린 결과가 나온다.
-    if ck.get("jamo_text"):
-        raise RuntimeError(
-            f"이 ckpt 는 제거된 jamo-text(C1) 옵션으로 학습됐습니다: {ckpt}\n"
-            "  해당 실험은 기각돼 코드가 삭제됐습니다. 다른 ckpt 를 쓰세요.")
     step = ck.get("step", "?"); del ck, st
     model.eval()
     return model, step
