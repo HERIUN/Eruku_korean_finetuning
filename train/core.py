@@ -49,9 +49,9 @@ def make_parser():
                    help="resume/pretrained 로드 시 ckpt 의 vae.* 키를 strip → --vae-checkpoint 로 준 새 VAE 유지. "
                         "한글적응 full VAE 교체 후 Eruku 재적응 시 필수(안 쓰면 ckpt 의 옛 VAE 가 덮어씀)")
     p.add_argument("--t5-checkpoint", default="google-t5/t5-large")
-    p.add_argument("--eruku-pretrained", default="model_zoo/eruku_pretrained/000073688.pth",
-                   help="영어 pretrained ckpt. 로컬에 없으면 HF blowing-up-groundhogs/eruku "
-                        "의 pytorch_model.bin 을 자동 다운로드 (~2.9GB)")
+    p.add_argument("--eruku-pretrained", default="blowing-up-groundhogs/eruku",
+                   help="영어 pretrained 시작점. HF repo id(기본, pytorch_model.bin ~2.9GB 자동 다운로드) "
+                        "또는 로컬 .pth 경로. --resume 지정 시 무시됨")
     p.add_argument("--max-steps", type=int, default=20000,
                    help="누적 virtual step 상한 (resume 시에도 절대값). --extra-steps 지정 시 무시됨")
     p.add_argument("--extra-steps", type=int, default=None,
@@ -136,6 +136,22 @@ def data_paths_of(args) -> dict:
 def parse_args(argv=None, default_config=None):
     """make_parser() + config yaml 적용. Phase 진입점이 쓰는 표준 진입 함수."""
     return _config.parse_args(make_parser(), argv, default_config=default_config)
+
+
+def resolve_pretrained(spec: str) -> Path:
+    """`--eruku-pretrained` 해석: 로컬 .pth 경로 | HF repo id.
+
+    로컬 파일이 있으면(주어진 경로 그대로 또는 저장소 루트 기준) 그것을, 없으면 HF repo id 로
+    보고 `pytorch_model.bin` 을 받는다. 저장소에 pretrained 를 동봉하지 않으므로 기본값은
+    HF repo id(`blowing-up-groundhogs/eruku`) 다.
+    """
+    for cand in (Path(spec), HERE / spec):
+        if cand.is_file():
+            print(f"local pretrained 사용: {cand}")
+            return cand
+    from huggingface_hub import hf_hub_download
+    print(f"HF 에서 pretrained 다운로드: {spec} (pytorch_model.bin, ~2.9GB, 캐시됨)")
+    return Path(hf_hub_download(spec, "pytorch_model.bin"))
 
 
 def truncation_reason(sl_px, gl_px, max_img_len):
@@ -328,11 +344,7 @@ def train(args):
     # 영어 학습 Eruku ckpt 로드 (strict=False). resume 시엔 건너뜀(resume ckpt 가 모델).
     # 로컬 파일이 없으면 HF 공식 릴리즈(pytorch_model.bin, ~2.9GB)를 자동 다운로드.
     if not args.resume and args.eruku_pretrained:
-        ck_path = Path(args.eruku_pretrained)
-        if not ck_path.exists():
-            from huggingface_hub import hf_hub_download
-            print("local pretrained 없음 → HF 자동 다운로드: blowing-up-groundhogs/eruku (~2.9GB)")
-            ck_path = Path(hf_hub_download("blowing-up-groundhogs/eruku", "pytorch_model.bin"))
+        ck_path = resolve_pretrained(args.eruku_pretrained)
         print(f"loading pretrained: {ck_path}")
         ckpt = torch.load(ck_path, map_location="cpu", weights_only=False)
         state = ckpt["model"] if "model" in ckpt else ckpt

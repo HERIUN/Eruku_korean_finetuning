@@ -18,11 +18,10 @@ run:
 model:
   t5_checkpoint: google-t5/t5-large  # config 만 사용(가중치 아님) — T5 본체는 랜덤 초기화 후 학습
   vae_checkpoint: blowing-up-groundhogs/emuru_vae   # HF 에서 자동 다운로드 (~300MB)
-  # 영어 pretrained 시작점. **로컬 캐시 경로**이고, 파일이 없으면 HF
-  # blowing-up-groundhogs/eruku 의 pytorch_model.bin (~2.9GB) 을 자동으로 받는다.
-  # 저장소에 동봉돼 있지 않으므로 기본 상태에서는 항상 자동 다운로드된다(정상).
+  # 영어 pretrained 시작점 — HF repo id (pytorch_model.bin ~2.9GB, 최초 1회 받아 캐시).
+  # 로컬 .pth 경로를 줘도 된다(파일이 있으면 그걸 쓰고, 없으면 HF repo id 로 본다).
   # resume 이 지정되면 무시된다(resume ckpt 가 모델).
-  eruku_pretrained: model_zoo/eruku_pretrained/000073688.pth
+  eruku_pretrained: blowing-up-groundhogs/eruku
   reset_vae: false                   # ckpt 의 vae.* 를 버리고 위 vae_checkpoint 유지
   ocr_checkpoint: null               # OrigamiNet (OCR loss 쓸 때만. alpha=1.0 이라 기본 미사용)
   jamo_text: false                   # 텍스트 조건을 NFD 자모로 분해 (A/B 기각됨, 재현용)

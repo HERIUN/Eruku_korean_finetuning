@@ -15,7 +15,7 @@
 |---|---|---|
 | 모델 생성 시 항상 | `google/byt5-small` 토크나이저 + `google-t5/t5-large` **config 만**(가중치 아님 — `T5ForConditionalGeneration(config)` 는 랜덤 초기화) | 작음 |
 | 모델 생성 시 항상 | `blowing-up-groundhogs/emuru_vae` VAE 가중치 | ~300MB |
-| 학습 시작 (`--resume` 없을 때) | 영어 pretrained `blowing-up-groundhogs/eruku` 의 `pytorch_model.bin` | ~2.9GB |
+| 학습 시작 (`--resume` 없을 때) | 영어 pretrained `blowing-up-groundhogs/eruku` 의 `pytorch_model.bin` (config `model.eruku_pretrained` 기본값 = 이 HF repo id. 로컬 `.pth` 경로를 줘도 됨) | ~2.9GB |
 | `./inference.sh hf` | 발행본 `HERIUN/eruku_korean` + 페어 VAE `HERIUN/emuru_vae_korean` | ~3.2GB |
 
 안 받아지는 것: 학습된 T5 본체 `.pth`(`finetune_runs/` 는 gitignore) — 발행본으로 대체하거나
