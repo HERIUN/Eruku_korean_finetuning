@@ -175,8 +175,14 @@ class Emuru(torch.nn.Module):
 
             # Ensure widths are within bounds.
             # 원본 validate_widths 와 동일: style 은 max_img_len 의 절반까지만 차지하게 제한.
-            # (이게 없으면 긴 style 이 budget 을 다 먹고, 끝의 truncation 이 gen 꼬리를 잘라
-            #  모델이 EOG 위치를 잘못 배움 = 조기 EOG / 전체문장 미생성의 원인)
+            # ※ 학습에서는 이 clamp 가 발동하지 않는다 — train.core 가 filter_no_truncation 으로
+            #   예산 초과 샘플을 **미리 버리기** 때문(no-truncation 정책, e02e1d9). 따라서 절반 캡은
+            #   "긴 style 을 학습에 쓸 것인가"라는 정책 선택이지, 잘림을 막는 장치가 아니다.
+            #   없애면 판정이 합 조건 하나(style + gen + 16 <= max_img_len)로 단순해진다.
+            #   실제로 이 캡 때문에만 버려지는 샘플은 전체의 0.016%(75/480,000) 였다.
+            # ※ 반면 **추론에는 drop 이 없어** 여기서 진짜로 잘린다. style 이 max_img_len/2 를
+            #   넘으면 뒷부분이 조건에서 빠진다 → 추론 max_img_len 을 학습과 맞출 것
+            #   (configs/{eval,infer}.yaml 의 max_img_len).
             # ★ 단위주의: sl 은 '픽셀', style_img_embeds.shape[-1] 은 'latent 폭'(=픽셀/8).
             #   원본은 style 을 고정 8192px 로 패딩(pad_images_fixed)해 latent 폭을 크게 만들어
             #   이 항이 발동 안 하게 했지만, 여기선 배치최대 폭으로만 패딩하므로 *8 로 픽셀 환산해야
@@ -191,7 +197,8 @@ class Emuru(torch.nn.Module):
                 gl = _len_at(gen_len, el)
 
                 # 원본 validate_widths 와 동일: gen 은 style 을 뺀 남은 budget 까지만.
-                # (SOG+EOG 2 토큰 = 16px 예약). 이러면 끝의 truncation 이 gen 을 자를 일이 없음.
+                # (SOG+EOG 2 토큰 = 16px 예약) → 전개하면 style + gen + 16 <= max_img_len 과 같다.
+                # 학습에서는 위와 같은 이유로 발동하지 않는다(초과 샘플은 이미 drop 됨).
                 # ★ 단위주의: gen_img_embeds.shape[-1] 은 latent 폭 → *8 로 픽셀 환산 (위 sl 과 동일 이유)
                 remaining = max(64, max_img_len - sl - 16)
                 gl = max(64, min(gl, gen_img_embeds.shape[-1] * 8, remaining))

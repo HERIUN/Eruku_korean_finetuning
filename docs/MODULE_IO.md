@@ -140,9 +140,17 @@ remaining = max(64, max_img_len - sl - 16)                                # SOG/
 gl = max(64, min(gl, gen_img_embeds.shape[-1] * 8, remaining))
 ```
 
-style이 예산을 다 먹어 gen 꼬리가 잘리면 모델이 EOG 위치를 잘못 배운다(= 조기 종료/문장 미완성).
-`train.core.truncation_reason()` (`train/core.py:120`) 이 **같은 계산을 미리 돌려** 잘릴 샘플을
-학습에서 아예 drop 하고 `truncated_samples.csv` 에 기록한다.
+**학습에서는 이 clamp 가 발동하지 않는다.** `train.core.truncation_reason()` 이 같은 계산을
+미리 돌려 clamp 대상 샘플을 **통째로 drop** 하고 `truncated_samples.csv` 에 기록하기 때문이다
+(no-truncation 정책). 그래서 "style 이 예산을 먹어 gen 꼬리가 잘린다 → 조기 EOG" 는 이 정책이
+생기기 전 이야기이고, 지금은 이미지↔라벨 불일치가 학습에 들어가지 않는다.
+
+남은 것은 두 조건의 성격 차이다. `gen` 조건은 전개하면 `style + gen + 16 ≤ max_img_len` 즉
+**총 예산**이고, `style ≤ max_img_len/2` 는 "긴 style 을 쓸 것인가"라는 **별도 정책**이다.
+절반 캡 때문에만 버려지는 샘플은 측정상 전체의 0.016%(75/480,000) 다.
+
+**추론에는 drop 이 없어** 절반 캡이 그대로 잘라낸다 → 추론 `max_img_len` 을 학습과 맞춰야 한다
+(`configs/{eval,infer}.yaml`).
 
 > ⚠️ **단위 함정**: `sl`/`gl` 은 **픽셀**, `*_img_embeds.shape[-1]` 은 **latent 폭(=픽셀/8)** 이다.
 > `*8` 환산을 빼먹으면 style이 1/8로 잘린다 — 실제로 있었던 버그다

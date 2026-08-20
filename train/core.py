@@ -150,11 +150,20 @@ def resolve_pretrained(spec: str) -> Path:
 
 
 def truncation_reason(sl_px, gl_px, max_img_len):
-    """get_model_inputs 의 clamp 와 **동일한** 계산으로 이 샘플이 잘리는지 판정.
+    """get_model_inputs 의 clamp 와 **동일한** 계산으로 이 샘플이 clamp 대상인지 판정.
 
-    잘림 조건(둘 중 하나라도):
-      - style_len > max_img_len//2           → style 이 예산 절반에 잘림
-      - gen_len   > max_img_len - style - 16 → 남은 예산(SOG/EOG 16px 제외)에 gen 이 잘림
+    여기서 걸린 샘플은 잘려서 학습되는 게 아니라 **통째로 버려진다**(no-truncation 정책,
+    filter_no_truncation). 즉 clamp 는 학습에서 실제로 발동하지 않고, 이 함수는 "발동할 샘플을
+    미리 걸러내는" 역할이다.
+
+    조건(둘 중 하나라도):
+      - style_len > max_img_len//2            → style 이 예산 절반을 넘음
+      - gen_len   > max_img_len - style - 16  → 전개하면 style + gen + 16 > max_img_len,
+                                                즉 **총 예산 초과**(SOG/EOG 2토큰 16px 포함)
+    두 번째가 실질적인 예산 조건이고, 첫 번째는 "style 이 예산 절반을 넘어도 되는가"라는
+    별도 정책이다(get_model_inputs 의 절반 캡을 미러링). 절반 캡 때문에만 버려지는 샘플은
+    측정상 전체의 0.016%(75/480,000) 로, 캡을 없애면 합 조건 하나로 단순해진다.
+
     (단위: 모두 픽셀. get_model_inputs 는 latent*8 로 픽셀 환산해 비교 → 여기도 픽셀.)
 
     반환: None(안전) | (kind, have_px, budget_px)  kind ∈ {"style","gen"}
