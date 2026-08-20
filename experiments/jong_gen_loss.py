@@ -65,7 +65,7 @@ def build_natural_jong(n_lines, rng, per_line_cluster=2, per_line_other=2):
     """
     import custom_datasets.korean.fontset as G
     A = HERE / "assets"
-    ko = G.build_pools(A / "corpus/korean_lines.txt", A / "corpus/chars.txt",
+    ko = G.build_pools(A / "corpus/korean_lines.txt",
                        str(A / "corpus/english_words.txt"), 0, rng)["ko"]
     def has_cluster(w):
         return any(0xAC00 <= ord(c) <= 0xD7A3 and jong_group(decompose(c)[2]) == "겹받침(ㄳㄵ…)"

@@ -220,6 +220,10 @@ ds = OnlineSplitFontSquare(
 
 ![텍스트 샘플링 파이프라인](img_text_sampling.png)
 
+> ⚠️ 그림은 2026-08-19 기준이라 `Ko_set(7,305) = 어절 5,196 + chars.txt 낱글자 2,109` 로 그려져
+> 있는데, [D2](DATA_LIMITATIONS.md#d2-charstxt-가-ko-풀에-낱글자로-섞여-들어간다) 수정으로
+> **낱글자 합류 경로가 없어져 지금은 Ko_set = 5,196** 이다. 나머지 흐름은 그대로다.
+>
 > 그림의 sampler 파라미터(`len_words=1,8` / `1,12`, `max_chars=40` / `130`)와 예시 텍스트·이미지는
 > `finetune_runs/eruku_short_fullmse` 실행(seed 15042) 기준이다. 어절 수 범위는 Phase 별로 다르고
 > `--style-words` / `--gen-words` 로 바뀐다(§8-2). `max_chars` 는 하드코딩
@@ -247,7 +251,7 @@ style 텍스트와 gen(target) 텍스트를 **각각 독립적으로**, 아래 �
 
 | 토큰 종류 | 비중 | 출처 |
 |---|---|---|
-| 한글 단어 | **0.45** | `assets/corpus/korean_lines.txt` 에서 어절 추출 → 고유 5,196개 (파일은 22,996줄 1.7MB 이지만 **고유 라인은 941줄**, [D10](DATA_LIMITATIONS.md#d10-한글-코퍼스가-실은-941줄이다-24배-중복)). `chars.txt` 의 낱글자 2,109자도 여기 합류해 ko 풀 7,305 ([D2](DATA_LIMITATIONS.md#d2-charstxt-가-ko-풀에-낱글자로-섞여-들어간다)) |
+| 한글 단어 | **0.45** | `assets/corpus/korean_lines.txt` 에서 어절 추출 → **ko 풀 5,196** (파일은 22,996줄 1.7MB 이지만 **고유 라인은 941줄**, [D10](DATA_LIMITATIONS.md#d10-한글-코퍼스가-실은-941줄이다-24배-중복)). 2026-08-20 이전에는 `chars.txt` 낱글자 2,109자도 합류해 7,305였다 ([D2](DATA_LIMITATIONS.md#d2-charstxt-가-ko-풀에-낱글자로-섞여-들어간다)) |
 | 영어 단어 | **0.20** | `assets/corpus/english_words.txt` (466,551 단어 = dwyl/english-words `words.txt`) → `^[A-Za-z]{2,12}$` 필터 359,671 → **균등 무작위 8,000** 만 사용 ([D4](DATA_LIMITATIONS.md#d4-영어-풀이-사전-덤프에서-균등추첨이라-상용어가-없다)) |
 | 숫자 | **0.20** | 날짜/시각/금액/전화번호 등 패턴 생성 |
 | 랜덤음절 | **0.15** | KS X 1001 **2,350 음절**(전 폰트 교집합)에서 균등추첨한 1~4글자 가짜 단어 |

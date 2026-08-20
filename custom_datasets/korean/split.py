@@ -127,7 +127,6 @@ class KoreanSplitFontSquare(OnlineSplitFontSquare):
 # 코드 기본값 = 저장소 동봉 자산. config/CLI 로 바꿀 수 있다(다른 코퍼스·폰트로 실험).
 DEFAULT_PATHS = {
     "corpus_korean": ASSETS / "corpus/korean_lines.txt",    # 한글 어절 공급
-    "corpus_chars": ASSETS / "corpus/chars.txt",            # 낱글자 (ko 풀에 합류)
     "corpus_english": ASSETS / "corpus/english_words.txt",  # 영어 단어 사전
     "korean_fonts_dir": ASSETS / "fonts_korean_v2/train",   # 한글 writer 풀 (+ fonts_charsets.json)
     "backgrounds_dir": ASSETS / "backgrounds",              # style 종이 배경 패치
@@ -191,8 +190,7 @@ def build_samplers(style_range, gen_range, seed=42, sampler_cfg=None, n_english=
     if n_english is not None:
         cfg["n_english"] = n_english
     rng = random.Random(seed)
-    pools = G.build_pools(pth["corpus_korean"], pth["corpus_chars"],
-                          str(pth["corpus_english"]), cfg["n_english"], rng)
+    pools = G.build_pools(pth["corpus_korean"], str(pth["corpus_english"]), cfg["n_english"], rng)
     csj = charsets_json_for(fonts_dir, pth["korean_fonts_dir"])
     cps, syls = font_charset_cps(csj, cfg["charset_rule"])
     mk = lambda rng_, lo, hi, mc: G.MixedLineSampler(
@@ -251,8 +249,7 @@ def build_english_samplers(style_range, gen_range, fonts_dir, seed=42, sampler_c
     cfg = G.sampler_config(sampler_cfg)
     pth = data_paths(paths)
     rng = random.Random(seed)
-    pools = G.build_pools(pth["corpus_korean"], pth["corpus_chars"],
-                          str(pth["corpus_english"]), cfg["n_english"], rng)
+    pools = G.build_pools(pth["corpus_korean"], str(pth["corpus_english"]), cfg["n_english"], rng)
     csf = Path(fonts_dir) / "fonts_charsets.json"
     cps = font_charset_cps(csf, "union")[0] if csf.exists() else set(range(0x20, 0x7f))
     w = {"ko": 0.0, "en": 0.80, "num": 0.20, "rand": 0.0}   # 영어 단어 + 숫자만

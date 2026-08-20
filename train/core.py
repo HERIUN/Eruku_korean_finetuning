@@ -86,7 +86,6 @@ def make_parser():
                    help="한글 writer 폰트 디렉토리. 그 안의 fonts_charsets.json 이 샘플러 charset 이 된다")
     p.add_argument("--backgrounds-dir", default=None, help="style 종이배경 패치 디렉토리")
     p.add_argument("--corpus-korean", default=None, help="한글 어절 코퍼스 (.txt 또는 lines_json)")
-    p.add_argument("--corpus-chars", default=None, help="낱글자 charset 파일 (ko 풀에 합류)")
     p.add_argument("--corpus-english", default=None, help="영어 단어 사전")
     p.add_argument("--english-frac", type=float, default=0.0,
                    help="학습 샘플 중 영어 전용(라틴 폰트) 비율(0=미사용). 한글폰트는 영어도 렌더하지만 "
@@ -121,7 +120,7 @@ def make_parser():
 
 
 #: config/CLI 인자 이름 → korean/split.py DEFAULT_PATHS 키
-PATH_ARGS = ("korean_fonts_dir", "backgrounds_dir", "corpus_korean", "corpus_chars", "corpus_english")
+PATH_ARGS = ("korean_fonts_dir", "backgrounds_dir", "corpus_korean", "corpus_english")
 
 
 def data_paths_of(args) -> dict:

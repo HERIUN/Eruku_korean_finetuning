@@ -47,7 +47,7 @@ SPECIALS = list("%&@#*+=/~$")                                  # 단독 특수�
 # 학습 run 은 configs/*.yaml 의 data.sampler 로 덮어쓴다. 여기 값은 라이브러리 직접 사용/CLI 기본값.
 # 각 항목의 근거와 측정치는 docs/DATA_LIMITATIONS.md 참고.
 SAMPLER_DEFAULTS = {
-    # 토큰 종류 비중. ko=코퍼스 어절+chars.txt 낱글자 / en=영어사전 / num=런타임 생성 / rand=랜덤음절
+    # 토큰 종류 비중. ko=코퍼스 어절 / en=영어사전 / num=런타임 생성 / rand=랜덤음절
     "weights": {"ko": 0.45, "en": 0.20, "num": 0.20, "rand": 0.15},
     "punct_prob": 0.20,      # 토큰 뒤 구두점 (코퍼스 실측 0.076)          D9
     "wrap_prob": 0.05,       # 괄호·따옴표로 감싸기 (코퍼스 실측 0.001)    D9
@@ -73,10 +73,13 @@ def sampler_config(overrides: dict | None = None) -> dict:
 
 
 # ────────────────────────── corpus / text sampling ──────────────────────────
-def build_pools(corpus_path: Path, extra_chars: Path | None, english_path,
-                n_english: int, rng: random.Random) -> dict:
-    """ko(한글 단어)+en(영어 단어) 풀. 숫자/구두점/특수기호는 런타임 생성.
-    corpus_path: .txt(한 줄당 한 문장) 또는 lines_json([{text: ...}])."""
+def build_pools(corpus_path: Path, english_path, n_english: int, rng: random.Random) -> dict:
+    """ko(한글 어절)+en(영어 단어) 풀. 숫자/구두점/특수기호는 런타임 생성.
+
+    corpus_path: .txt(한 줄당 한 라인) 또는 lines_json([{text: ...}]).
+    ※ 예전에는 chars.txt 의 낱글자 2,109개를 ko 풀에 1글자 "단어"로 합쳤는데, 균등 추첨이라
+      ko 토큰의 32%가 의미 없는 낱글자가 됐다. rand 토큰이 이미 전 음절(폰트 교집합 2,350)을
+      균등 노출하므로 중복이고, 빼도 음절 커버리지는 그대로 2,350 이다. docs/DATA_LIMITATIONS.md D2."""
     corpus_path = Path(corpus_path)
     if corpus_path.suffix == ".txt":
         lines = corpus_path.read_text(encoding="utf-8").splitlines()
@@ -89,11 +92,6 @@ def build_pools(corpus_path: Path, extra_chars: Path | None, english_path,
             w = w.strip()
             if w and HANGUL_RE.search(w):
                 ko.add(w)
-    if extra_chars and Path(extra_chars).exists():
-        for line in Path(extra_chars).read_text(encoding="utf-8").splitlines():
-            s = line.strip()
-            if s and HANGUL_RE.search(s):
-                ko.add(s)
     en: list[str] = []
     if english_path and Path(english_path).exists():
         cand = [w.strip() for w in Path(english_path).read_text(
@@ -395,7 +393,6 @@ def main():
     HERE = Path(__file__).resolve().parents[2]   # 저장소 루트
     ap.add_argument("--fonts-dir", default=str(HERE / "assets" / "fonts_korean_v2"))
     ap.add_argument("--corpus", default=str(HERE / "assets" / "corpus" / "korean_lines.txt"))
-    ap.add_argument("--extra-chars", default=str(HERE / "assets" / "corpus" / "chars.txt"))
     ap.add_argument("--bg-dir", default=str(HERE / "assets" / "backgrounds"))
     ap.add_argument("--out", default=str(HERE / "data" / "korean_fontset_pilot"))
     ap.add_argument("--per-font-train", type=int, default=100)
@@ -449,8 +446,7 @@ def main():
     out_dir.mkdir(parents=True, exist_ok=True)
 
     # 토큰 풀 (ko + en); 숫자/구두점/특수기호는 런타임 생성
-    pools = build_pools(Path(args.corpus), Path(args.extra_chars),
-                        args.english_words, args.n_english, rng)
+    pools = build_pools(Path(args.corpus), args.english_words, args.n_english, rng)
     print(f"pools: ko={len(pools['ko'])} en={len(pools['en'])} "
           f"| weights ko/en/num={args.w_ko}/{args.w_en}/{args.w_num} punct={args.punct_prob}")
 

@@ -38,7 +38,7 @@ optim:
 # 다른 코퍼스·폰트로 실험할 때 여기만 바꾸면 된다(코드 수정 불필요).
 paths:
   corpus_korean: assets/corpus/korean_lines.txt     # 한글 어절 공급 (고유 941줄 → 어절 5,196)
-  corpus_chars: assets/corpus/chars.txt             # 낱글자 2,345 (ko 풀에 합류)
+                                                    # (chars.txt 낱글자는 더 이상 ko 풀에 안 섞는다 — D2)
   corpus_english: assets/corpus/english_words.txt   # 영어 사전 466,551 (dwyl/english-words)
   korean_fonts_dir: assets/fonts_korean_v2/train    # 한글 writer 83종 (+ fonts_charsets.json)
   english_fonts_dir: assets/fonts_english           # 라틴 writer 177종 (english_frac > 0 일 때)
@@ -59,7 +59,7 @@ data:
   # 자세한 동작은 docs/DATA_GENERATION.md §8-2, 한계는 docs/DATA_LIMITATIONS.md
   sampler:
     weights:                         # 토큰 종류 비중 (합이 1일 필요는 없음, 상대비)
-      ko: 0.45                       #   코퍼스 어절 + chars.txt 낱글자 (풀 7,305)
+      ko: 0.45                       #   코퍼스 어절 (풀 5,196)
       en: 0.20                       #   영어 사전에서 추첨한 n_english 개
       num: 0.20                      #   9개 포맷으로 런타임 생성 (풀 없음)
       rand: 0.15                     #   랜덤 음절 가짜단어 (논문 'random words')

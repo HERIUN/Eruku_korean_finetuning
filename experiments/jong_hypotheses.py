@@ -82,7 +82,7 @@ def train_exposure(seed=42):
     import json as _json, random as _random
     import custom_datasets.korean.fontset as G
     A = HERE / "assets"
-    pools = G.build_pools(A / "corpus/korean_lines.txt", A / "corpus/chars.txt",
+    pools = G.build_pools(A / "corpus/korean_lines.txt",
                           str(A / "corpus/english_words.txt"), 8000, _random.Random(seed))
     inter = None
     for s in _json.load(open(A / "fonts_korean_v2/train/fonts_charsets.json")).values():
