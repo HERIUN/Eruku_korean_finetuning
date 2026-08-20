@@ -24,13 +24,20 @@ HERE = Path(__file__).resolve().parents[1]   # 저장소 루트
 sys.path.insert(0, str(HERE))
 
 from custom_datasets.korean.handb import HanDBKoreanDataset, handb_collate
+from custom_datasets.korean import fontset as G
+from train import config as _config
 
 from models.eruku import Emuru
 
 
 def make_parser():
-    """Phase 1/2 가 공유하는 전체 인자. 각 Phase 진입점이 set_defaults 로 기본값을 덮어쓴다."""
+    """Phase 1/2 가 공유하는 전체 인자.
+
+    기본값은 **configs/*.yaml** 에서 온다(train/config.py). CLI 는 그 위를 덮어쓴다.
+    여기 default 는 config 없이 직접 호출할 때의 최종 fallback 이다."""
     p = argparse.ArgumentParser()
+    p.add_argument("--config", default=None,
+                   help="설정 yaml (configs/*.yaml). 우선순위 CLI > yaml > 코드 기본값")
     p.add_argument("--lines-json", default=None, help="offline lines_json (online-split 시 불필요)")
     p.add_argument("--out", default="finetune_runs/korean")
     p.add_argument("--vae-checkpoint", default="blowing-up-groundhogs/emuru_vae")
@@ -108,6 +115,11 @@ def make_parser():
     p.add_argument("--val-seed", type=int, default=1234,
                    help="val 세트 생성 시드(고정 → step 간 동일 샘플로 공정 비교)")
     return p
+
+
+def parse_args(argv=None, default_config=None):
+    """make_parser() + config yaml 적용. Phase 진입점이 쓰는 표준 진입 함수."""
+    return _config.parse_args(make_parser(), argv, default_config=default_config)
 
 
 def truncation_reason(sl_px, gl_px, max_img_len):
@@ -199,6 +211,8 @@ def _load_or_build_val_samples(args, out_dir, val_fonts=None):
         "val_seed": args.val_seed, "val_fonts_dir": args.val_fonts_dir,
         "val_font_names": sorted(p.name for p in val_fonts) if val_fonts else None,
         "val_english_fonts_dir": en_fonts,
+        # sampler 설정이 바뀌면 val 세트도 다시 렌더해야 학습/val 이 같은 분포가 된다
+        "sampler": G.sampler_config(getattr(args, "sampler", None)),
     }
     cache = out_dir / "val_set.pt"
     if cache.exists():
@@ -227,11 +241,12 @@ def _load_or_build_val_samples(args, out_dir, val_fonts=None):
     if ko_n > 0:
         kds = _mk(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
                   length=ko_n * 60, seed=args.val_seed,
-                  fonts_dir=(args.val_fonts_dir or val_fonts))
+                  fonts_dir=(args.val_fonts_dir or val_fonts), sampler_cfg=args.sampler)
         got, ko_skip = _draw_safe(kds, ko_n); samples += got
     if en_n > 0:
         eds = _mken(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
-                    length=en_n * 60, seed=args.val_seed + 777, fonts_dir=en_fonts)
+                    length=en_n * 60, seed=args.val_seed + 777, fonts_dir=en_fonts,
+                    sampler_cfg=args.sampler)
         got, en_skip = _draw_safe(eds, en_n); samples += got
     # deterministic shuffle → 배치마다 한글/영어가 섞이게(비율 편중 방지)
     random.Random(args.val_seed).shuffle(samples)
@@ -251,7 +266,9 @@ def train(args):
     # ── run config 기록: train_config.yml 에 run 히스토리 누적 ──
     cfg_path = out_dir / "train_config.yml"
     runs = (yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or []) if cfg_path.exists() else []
-    cur = {k: (list(v) if isinstance(v, tuple) else v) for k, v in vars(args).items()}
+    cur = {k: (list(v) if isinstance(v, tuple) else v)
+           for k, v in vars(args).items() if k != "sampler"}
+    cur["sampler"] = G.sampler_config(getattr(args, "sampler", None))   # 실제 적용된 샘플러 설정 전체
     if args.resume and runs:                      # resume 인데 파라미터가 달라지면 경고
         prev = runs[-1]["args"]
         for k in cur:
@@ -375,10 +392,10 @@ def train(args):
             ko_len = total_len - en_len
             ko_ds = make_dataset(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
                                  length=ko_len, seed=args.seed + seed_off, legacy=args.legacy_transform,
-                                 fonts_dir=train_fonts)
+                                 fonts_dir=train_fonts, sampler_cfg=args.sampler)
             en_ds = make_english_dataset(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
                                          length=en_len, seed=args.seed + seed_off + 777,
-                                         fonts_dir=args.english_fonts_dir)
+                                         fonts_dir=args.english_fonts_dir, sampler_cfg=args.sampler)
             dataset = ConcatDataset([ko_ds, en_ds])
             print(f"combined data: 한글폰트 {ko_len} + 영어폰트 {en_len} "
                   f"(english_frac={args.english_frac}, en fonts={en_ds.renderers_length})")
@@ -391,7 +408,7 @@ def train(args):
             dataset = make_dataset(style_range=tuple(args.style_words),
                                    gen_range=tuple(args.gen_words),
                                    length=total_len, seed=args.seed + seed_off, legacy=args.legacy_transform,
-                                   fonts_dir=train_fonts)
+                                   fonts_dir=train_fonts, sampler_cfg=args.sampler)
             if args.save_samples > 0:
                 dump_samples(dataset, args.save_samples, out_dir / "train_samples",
                              model=model, max_img_len=args.max_img_len)

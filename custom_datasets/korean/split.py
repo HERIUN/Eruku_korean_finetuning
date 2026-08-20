@@ -123,33 +123,49 @@ class KoreanSplitFontSquare(OnlineSplitFontSquare):
         }
 
 
-def build_samplers(style_range, gen_range, n_english=8000, seed=42):
+def font_charset_cps(charsets_json, rule="intersection"):
+    """폰트 charset json → (covered_cps, 한글음절 리스트).
+
+    rule="intersection": 전 폰트가 그릴 수 있는 글자만. 샘플러가 통과시킨 글자를 렌더가 다시
+        지우는 일이 없다(= 조용한 삭제 없음). 한글 경로 기본. docs/DATA_LIMITATIONS.md D8.
+    rule="union": 하나라도 그리면 통과. 영어 폰트 177종은 교집합이 63자(A-Za-z0-9+공백)뿐이라
+        구두점이 전멸하고 gen_number 도 randint 폴백만 남으므로 union 을 쓴다.
+    """
+    if rule not in ("intersection", "union"):
+        raise ValueError(f"charset_rule 은 intersection|union: {rule!r}")
+    uni, inter = set(), None
+    for s in json.load(open(charsets_json)).values():
+        f = {ord(c) for c in s}
+        uni |= f
+        inter = f if inter is None else inter & f
+    cps = inter if rule == "intersection" else uni
+    # rand 음절 풀은 규칙과 무관하게 항상 교집합 — 어떤 폰트에 배정돼도 두부가 안 뜨게
+    syls = sorted(chr(c) for c in (inter or set()) if 0xAC00 <= c <= 0xD7A3)
+    return cps, syls
+
+
+def build_samplers(style_range, gen_range, seed=42, sampler_cfg=None, n_english=None):
+    """한글 style/gen sampler 2개. sampler_cfg = configs/*.yaml 의 data.sampler
+    (미지정 키는 G.SAMPLER_DEFAULTS). n_english 는 하위호환 단축 인자."""
+    cfg = G.sampler_config(sampler_cfg)
+    if n_english is not None:
+        cfg["n_english"] = n_english
     rng = random.Random(seed)
     pools = G.build_pools(ASSETS / "corpus/korean_lines.txt",
                           ASSETS / "corpus/chars.txt",
-                          str(ASSETS / "corpus/english_words.txt"), n_english, rng)
-    cs = json.load(open(ASSETS / "fonts_korean_v2/train/fonts_charsets.json"))
-    inter = None
-    for s in cs.values():
-        f = {ord(c) for c in s}
-        inter = f if inter is None else inter & f
-    # covered_cps = 전 폰트 charset 의 **교집합**. 합집합을 쓰면 "어떤 폰트든 하나라도 그리면 통과"라
-    # 정작 배정된 폰트가 못 그리는 글자(…“”‘’~)가 통과했다가 렌더 직전에 조용히 삭제된다
-    # (라인의 7.1%). 교집합으로 좁혀도 ko/en 풀은 100% 살아남아 잃는 게 없다. docs/DATA_LIMITATIONS.md D8.
-    cps = inter
-    # rand 음절 풀 = 그 교집합의 한글 음절 (KS X 1001 2350자) → tofu-safe
-    syls = sorted(chr(c) for c in inter if 0xAC00 <= c <= 0xD7A3)
-    w = {"ko": 0.45, "en": 0.20, "num": 0.20, "rand": 0.15}
-    # punct/wrap 은 독립 확률. 코퍼스 실측(후행 7.6% / 감싸기 0.1%) 대비 글리프 노출을 위해
-    # 여전히 상향이지만, 구 값(0.35 / 0.14=0.35*0.4 매직넘버)의 과다 노출은 줄였다. D9.
-    punct, wrap, special = 0.20, 0.05, 0.08
-    style_s = G.MixedLineSampler(pools["ko"], pools["en"], cps, w, style_range[0], style_range[1], 40,
-                                 punct, special, rng, rand_syllables=syls, wrap_prob=wrap)
-    gen_s = G.MixedLineSampler(pools["ko"], pools["en"], cps, w, gen_range[0], gen_range[1], 130,
-                               punct, special, rng, rand_syllables=syls, wrap_prob=wrap)
+                          str(ASSETS / "corpus/english_words.txt"), cfg["n_english"], rng)
+    cps, syls = font_charset_cps(ASSETS / "fonts_korean_v2/train/fonts_charsets.json",
+                                 cfg["charset_rule"])
+    mk = lambda rng_, lo, hi, mc: G.MixedLineSampler(
+        pools["ko"], pools["en"], cps, cfg["weights"], lo, hi, mc,
+        cfg["punct_prob"], cfg["special_prob"], rng_, rand_syllables=syls,
+        wrap_prob=cfg["wrap_prob"], rand_len_weights=cfg["rand_len_weights"])
+    style_s = mk(rng, style_range[0], style_range[1], cfg["max_chars"]["style"])
+    gen_s = mk(rng, gen_range[0], gen_range[1], cfg["max_chars"]["gen"])
     print(f"samplers: style {style_range} gen {gen_range} | ko {len(pools['ko'])} en {len(pools['en'])} "
-          f"rand_syl {len(syls)} cps {len(cps)} (font charset 교집합) "
-          f"| punct {punct} wrap {wrap} special {special}")
+          f"rand_syl {len(syls)} cps {len(cps)} ({cfg['charset_rule']}) | "
+          f"w {cfg['weights']} punct {cfg['punct_prob']} wrap {cfg['wrap_prob']} "
+          f"special {cfg['special_prob']} max_chars {cfg['max_chars']}")
     return style_s, gen_s
 
 
@@ -167,11 +183,13 @@ def split_train_fonts(val_frac, seed=42, fonts_dir=None):
             [f for i, f in enumerate(fonts) if i in val_i])
 
 
-def make_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, seed=42, fonts_dir=None, legacy=False):
+def make_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, seed=42, fonts_dir=None,
+                 legacy=False, sampler_cfg=None):
     """fonts_dir: None=학습 폰트 전체(fonts_korean_v2/train) / 디렉토리 경로 / 폰트 경로 리스트
     (split_train_fonts 의 분할 결과). held-out 은 fonts_korean_v2/test 디렉토리 전달.
-    legacy=True: 원본 composite transform(데이터 정책 변경 전) 사용."""
-    style_s, gen_s = build_samplers(style_range, gen_range, seed=seed)
+    legacy=True: 원본 composite transform(데이터 정책 변경 전) 사용.
+    sampler_cfg: configs/*.yaml 의 data.sampler (None=G.SAMPLER_DEFAULTS)."""
+    style_s, gen_s = build_samplers(style_range, gen_range, seed=seed, sampler_cfg=sampler_cfg)
     if fonts_dir is None:
         fonts_dir = ASSETS / "fonts_korean_v2/train"
     elif not isinstance(fonts_dir, (list, tuple)):
@@ -181,7 +199,7 @@ def make_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, seed=42, fo
                                  style_s, gen_s, length=length, legacy=legacy)
 
 
-def build_english_samplers(style_range, gen_range, fonts_dir, n_english=8000, seed=42):
+def build_english_samplers(style_range, gen_range, fonts_dir, seed=42, sampler_cfg=None):
     """영어 전용(라틴 폰트) sampler. ko=0, en+num 만 → 한글 토푸 방지.
     cps = 영어 폰트 charset union (없으면 ASCII 가시문자).
 
@@ -189,31 +207,30 @@ def build_english_samplers(style_range, gen_range, fonts_dir, n_english=8000, se
     교집합은 63자(A-Za-z0-9+공백)뿐이라 구두점이 전멸하고 gen_number 의 `%,-.:` 까지 걸려
     숫자가 randint 폴백만 남는다. 대신 렌더 단계의 글자 삭제를 그대로 감수한다.
     docs/DATA_LIMITATIONS.md D8 참고."""
+    cfg = G.sampler_config(sampler_cfg)
     rng = random.Random(seed)
     pools = G.build_pools(ASSETS / "corpus/korean_lines.txt", ASSETS / "corpus/chars.txt",
-                          str(ASSETS / "corpus/english_words.txt"), n_english, rng)
+                          str(ASSETS / "corpus/english_words.txt"), cfg["n_english"], rng)
     csf = Path(fonts_dir) / "fonts_charsets.json"
-    cps = set()
-    if csf.exists():
-        for s in json.load(open(csf)).values():
-            cps |= {ord(c) for c in s}
-    else:
-        cps = set(range(0x20, 0x7f))
+    cps = font_charset_cps(csf, "union")[0] if csf.exists() else set(range(0x20, 0x7f))
     w = {"ko": 0.0, "en": 0.80, "num": 0.20, "rand": 0.0}   # 영어 단어 + 숫자만
-    punct, wrap, special = 0.20, 0.05, 0.08                 # 한글 경로와 동일 (D9)
-    style_s = G.MixedLineSampler(pools["ko"], pools["en"], cps, w, style_range[0], style_range[1],
-                                 40, punct, special, rng, rand_syllables=[], wrap_prob=wrap)
-    gen_s = G.MixedLineSampler(pools["ko"], pools["en"], cps, w, gen_range[0], gen_range[1],
-                               130, punct, special, rng, rand_syllables=[], wrap_prob=wrap)
+    mk = lambda lo, hi, mc: G.MixedLineSampler(
+        pools["ko"], pools["en"], cps, w, lo, hi, mc,
+        cfg["punct_prob"], cfg["special_prob"], rng, rand_syllables=[],
+        wrap_prob=cfg["wrap_prob"], rand_len_weights=cfg["rand_len_weights"])
+    style_s = mk(style_range[0], style_range[1], cfg["max_chars"]["style"])
+    gen_s = mk(gen_range[0], gen_range[1], cfg["max_chars"]["gen"])
     print(f"english samplers: style {style_range} gen {gen_range} | en {len(pools['en'])} cps {len(cps)} "
-          f"(union) | punct {punct} wrap {wrap} special {special}")
+          f"(union 고정) | punct {cfg['punct_prob']} wrap {cfg['wrap_prob']} special {cfg['special_prob']}")
     return style_s, gen_s
 
 
-def make_english_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, seed=42, fonts_dir=None):
+def make_english_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, seed=42, fonts_dir=None,
+                         sampler_cfg=None):
     """라틴 폰트로 영어 전용 split 데이터. 학습에 한글 데이터와 섞어 영어 스타일 다양성 보강."""
     assert fonts_dir, "english fonts_dir 필요"
-    style_s, gen_s = build_english_samplers(style_range, gen_range, fonts_dir, seed=seed)
+    style_s, gen_s = build_english_samplers(style_range, gen_range, fonts_dir, seed=seed,
+                                            sampler_cfg=sampler_cfg)
     return KoreanSplitFontSquare(Path(fonts_dir), str(ASSETS / "backgrounds"),
                                  style_s, gen_s, length=length)
 

@@ -297,9 +297,14 @@ style 참조 이미지의 전사 텍스트. `f"{style_text}<sog>{gen_text}"` 로
 train.sh                   # 학습·데이터: best|en2ko|phase1|phase2|vae|htr|data|refset
 inference.sh               # 생성·시각화·릴리즈: best|hf|show|matrix|echo|refset|release
 eval.sh                    # 평가·감사·실험: best|cer|easyocr|echo|all|fonts|exp
+# 설정  (데이터 합성 ~ 학습 파라미터 전부, CLI > yaml > 코드 기본값)
+configs/base.yaml          # ★ 조절 가능한 전체 항목 + 기본값 (주석 포함, 여기부터 보면 됨)
+configs/phase1.yaml        # 논문 Phase 1 레시피 / phase2.yaml / korean_from_en.yaml
+configs/README.md          # 우선순위·상속·새 인자 추가법
 # 학습
-train/core.py              # 학습 공통 코어 (make_parser 전체 인자 + 학습 루프)
-train/phase1.py            # Phase 1 진입점 (짧은 어절, batch128×2, 65000 step)
+train/core.py              # 학습 공통 코어 (make_parser 인자 정의 + 학습 루프)
+train/config.py            # yaml 로더 (_base_ 상속, CLI 덮어쓰기, 오타 키 거부)
+train/phase1.py            # Phase 1 진입점 = configs/phase1.yaml 을 무는 얇은 래퍼
 train/phase2.py            # Phase 2 진입점 (긴 줄, resume, +5000 step)
 train/korean_from_en.py    # 영어 pretrained → 한글 직접 (Phase 1 생략)
 train/eruku_continous.py   # (원본 repo 스타일 트레이너: wandb/accelerate/webdataset 기반, 참고용)
@@ -309,7 +314,8 @@ train/aux_htr.py           # 한글 HTR 리더 finetune (VAE 의 HTR loss + 평�
 custom_datasets/korean/split.py    # 온라인 한글 split 데이터셋 (+ CLI 샘플 덤프, --show-model-input)
 custom_datasets/korean/fontset.py  # 오프라인 라인 생성기 + MixedLineSampler/build_pools (공용)
 custom_datasets/korean/aux.py     # HTR 학습용 (라인이미지, 전사) 데이터셋 + alphabet.py
-custom_datasets/upstream/font_square/       # 원본 repo 데이터 코드 (렌더/증강, tps)
+custom_datasets/upstream/  # 원본 repo 코드 vendored (수정 금지 — upstream/README.md 참고)
+custom_datasets/korean/    # 이 repo 추가분 (upstream 을 import, 역방향 없음)
 custom_datasets/hw_line_sample/    # 실제 손글씨 라인 20장 + label.txt (미러링/복원 평가용)
 tools/                     # font_audit(폰트 품질 감사) · fetch_aux · hf_upload(HF 릴리즈)
 # 추론 / 평가  (infer/show.py 가 공유 라이브러리: load_model/gen_arr/render_in_font …)

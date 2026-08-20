@@ -3,9 +3,11 @@
 배포본을 그대로 재현하려면 [`REPRODUCE.md`](REPRODUCE.md) 를 볼 것. 이 문서는 **새로 돌릴 때** 의
 레시피다. 데이터가 어떻게 합성되는지는 [`DATA_GENERATION.md`](DATA_GENERATION.md) §8.
 
-> 진입점 구조: 공통 로직은 `train/core.py`(전체 인자 `make_parser` + 학습 루프)에 있고,
-> 각 Phase 스크립트(`train/phase1.py`/`train/phase2.py`/`train/korean_from_en.py`)가
-> `set_defaults` 로 레시피를 덮어씌운 뒤 `train()` 을 호출한다. 개별 인자는 CLI 로 덮어쓰기 가능.
+> 진입점 구조: 레시피는 **`configs/*.yaml`** 에 있고(데이터 합성 파라미터까지 전부),
+> 공통 로직은 `train/core.py`(인자 정의 `make_parser` + 학습 루프)에 있다. 각 Phase 스크립트
+> (`train/phase1.py`/`train/phase2.py`/`train/korean_from_en.py`)는 자기 config 를 기본값으로
+> 물고 `train()` 을 부르는 얇은 래퍼다. 우선순위는 **CLI > yaml > 코드 기본값**.
+> 조절 가능한 전체 항목은 [`configs/base.yaml`](../configs/base.yaml) 한 파일에 주석과 함께 있다.
 
 ## 0. 무엇이 자동으로 받아지나
 
@@ -29,6 +31,7 @@ OrigamiNet OCR ckpt 는 불필요하다 (`alpha=1.0` 이라 loss 미사용, 공�
 GPU=0 ./train.sh phase1                   # → finetune_runs/korean_p1/
 GPU=0 ./train.sh phase2                   # korean_p1/checkpoint_last.pth 에서 resume, +5000 step
 GPU=0 ./train.sh phase1 --batch-size 16 --grad-accum 16 --max-steps 20000   # 인자 덮어쓰기
+GPU=0 ./train.sh phase1 --config configs/my_run.yaml                       # 다른 config 로
 
 # (권장 대안) 영어 pretrained → 바로 한글 긴 줄 — Phase 1 생략, 영어능력 보존
 GPU=0 ./train.sh en2ko                    # → finetune_runs/korean_en2ko/
@@ -87,5 +90,6 @@ pretrained 에서 전이된다. (실제 배포본은 Phase 1 을 생략했다 �
 - `--logvar-weighting` — 원본 LDM 관례의 학습형 관측 노이즈 가중. 기본 off, 우리 세팅선 무익
 - `--val-font-frac` — 학습 폰트에서 val 폰트를 떼는 비율(폰트 일반화 측정). VRAM ~20GB(batch 8)
 
-전체 인자 목록은 `train/core.py:make_parser()`, 레시피 기본값은 `train/phase1.py` /
-`train/phase2.py` / `train/korean_from_en.py` 의 `set_defaults`.
+전체 인자 목록과 설명은 [`configs/base.yaml`](../configs/base.yaml) (데이터 샘플러 포함),
+레시피별 차이는 `configs/phase1.yaml` / `configs/phase2.yaml` / `configs/korean_from_en.yaml`.
+config 사용법은 [`configs/README.md`](../configs/README.md).

@@ -1,0 +1,22 @@
+# Phase 1 — 한글 glyph 학습 (논문 pre-training 레시피)
+# 짧은 2~3어절 pair 로 byte→glyph 매핑을 새로 학습한다.
+#   python train/phase1.py
+_base_: base.yaml
+
+run:
+  out: finetune_runs/korean_p1
+  num_workers: 16
+  save_every: 2500
+  log_every: 10
+  save_samples: 16
+
+optim:
+  batch_size: 128        # virtual batch 256 = 128 × 2 (논문)
+  grad_accum: 2
+  lr: 1.0e-4             # 논문 lr (virtual 256 기준)
+  max_steps: 65000       # 논문 Phase 1 iteration (≈16.6M 샘플)
+
+data:
+  style_words: [2, 3]    # 논문 Phase 1 = 짧은 2~3어절
+  gen_words: [2, 3]
+  text_dropout: 0.05     # p_uncond

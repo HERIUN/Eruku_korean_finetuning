@@ -1,39 +1,26 @@
-"""Phase 2: 긴 줄 일반화 (논문 fine-tuning 레시피).
+"""Phase 2: 긴 줄 적응 (논문 5000 step 추가).
 
-Phase 1 ckpt 에서 resume, style 1~8 / gen 1~32 어절로 길이 일반화만 학습.
-virtual batch 256 = batch 2 × grad-accum 128,  lr 1e-4,  +5000 step.
+Phase 1 ckpt 에서 resume 해 긴 style(1~8)/gen(1~32) 으로 이어 학습.
+설정은 전부 **configs/phase2.yaml** 에 있다 (virtual batch 256, extra 5000 step, p_drop 0.10).
 
-  python train/phase2.py                 # Phase1 의 checkpoint_last.pth 에서 resume
-  CUDA_VISIBLE_DEVICES=2 python train/phase2.py
-  python train/phase2.py --resume finetune_runs/korean_p1/checkpoint_step_065000.pth
+  python train/phase2.py                          # configs/phase2.yaml
+  python train/phase2.py --extra-steps 3000        # 일부만 CLI 로 덮어쓰기
+  python train/phase2.py --config configs/my.yaml # 다른 config
+  CUDA_VISIBLE_DEVICES=2 python train/phase2.py   # GPU 지정
 
-핵심: --extra-steps 5000 → max_steps = resume_step(65000) + 5000 = 70000 자동계산.
-      (max-steps 를 5000 으로 주면 step 카운터가 65000 에서 시작해 즉시 종료하는 사고를 방지)
-
-산출물: finetune_runs/korean_p2/
+산출물: configs/phase2.yaml 의 run.out (기본 finetune_runs/korean_p2)
 """
 import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))   # 저장소 루트
 
-from train.core import make_parser, train
+from train.core import parse_args, train
+
+CONFIG = Path(__file__).resolve().parents[1] / "configs" / "phase2.yaml"
 
 
 def main():
-    p = make_parser()
-    p.set_defaults(
-        online_split=True,
-        style_words=[1, 8], gen_words=[1, 32],
-        text_dropout=0.05, style_text_dropout=0.10,
-        batch_size=2, grad_accum=128, lr=1e-4,
-        num_workers=16,
-        extra_steps=5000,                 # resume step + 5000 = 누적 max_steps 자동
-        save_every=250, log_every=10,
-        save_samples=16,
-        resume="finetune_runs/korean_p1/checkpoint_last.pth",
-        out="finetune_runs/korean_p2",
-    )
-    train(p.parse_args())
+    train(parse_args(default_config=str(CONFIG)))
 
 
 if __name__ == "__main__":

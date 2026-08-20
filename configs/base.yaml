@@ -1,0 +1,72 @@
+# Eruku 한글 파인튜닝 — 전체 파라미터 기본값
+#
+# 이 파일 하나에 "무엇을 조절할 수 있는가"가 전부 들어 있다. 각 phase config 는
+# `_base_: base.yaml` 로 상속해 **다른 것만** 적는다.
+# 우선순위: CLI > 이 yaml > 코드 기본값.  키 이름 = CLI 인자명(-- 없이, - 는 _ 로).
+# 섹션(run/model/optim/data/val)은 사람이 읽기 위한 그룹일 뿐 동작에 영향 없다.
+
+run:
+  out: finetune_runs/korean          # 산출물 디렉토리 (ckpt, 로그, 샘플)
+  seed: 42
+  device: cuda
+  resume: null                       # ckpt 경로. 지정 시 model+optimizer+step 복원
+  num_workers: 2                     # 폰트 래스터화가 CPU 병목 → 16 권장
+  save_every: 2000                   # virtual step 기준
+  log_every: 50
+  save_samples: 0                    # 학습 시작 시 데이터 샘플 N개 저장(0=안 함)
+
+model:
+  t5_checkpoint: google-t5/t5-large
+  vae_checkpoint: blowing-up-groundhogs/emuru_vae
+  eruku_pretrained: model_zoo/eruku_pretrained/000073688.pth   # 영어 pretrained
+  reset_vae: false                   # ckpt 의 vae.* 를 버리고 위 vae_checkpoint 유지
+  ocr_checkpoint: null               # OrigamiNet (OCR loss 쓸 때만)
+  jamo_text: false                   # 텍스트 조건을 NFD 자모로 분해 (A/B 기각됨, 재현용)
+
+optim:
+  batch_size: 2
+  grad_accum: 1                      # virtual batch = batch_size × grad_accum (논문 256)
+  lr: 5.0e-5                         # 논문 1e-4 는 virtual 256 기준
+  max_steps: 20000                   # 누적 virtual step 상한
+  extra_steps: null                  # 지정 시 max_steps = resume_step + extra_steps
+  max_img_len: 8192                  # 디코더 시퀀스 픽셀폭 예산(=//8 토큰). 원본 8192
+                                     #   style ≤ max_img_len/2, gen ≤ 잔여. 초과 샘플은 drop
+
+data:
+  online_split: true                 # 온라인 합성(권장). false 면 lines_json 사용
+  lines_json: null                   # 오프라인 데이터 경로 (online_split=false 일 때)
+  style_words: [1, 8]                # style 라인 어절수 [min, max]
+  gen_words: [1, 32]                 # gen(target) 라인 어절수 [min, max]
+  english_fonts_dir: assets/fonts_english
+  english_frac: 0.0                  # 학습 샘플 중 라틴 폰트 영어 데이터 비율
+  legacy_transform: false            # 원본 composite 증강(합쳐 렌더+경계분할) 재현
+  text_dropout: 0.1                  # 논문 p_uncond — style+gen 텍스트 통째 drop (CFG 학습)
+  style_text_dropout: 0.0            # 논문 p_drop (Phase 2) — style 텍스트만 drop
+
+  # 텍스트 샘플러 — 4개 소스에서 style_text/gen_text 를 만드는 규칙.
+  # 자세한 동작은 docs/DATA_GENERATION.md §8-2, 한계는 docs/DATA_LIMITATIONS.md
+  sampler:
+    weights:                         # 토큰 종류 비중 (합이 1일 필요는 없음, 상대비)
+      ko: 0.45                       #   코퍼스 어절 + chars.txt 낱글자 (풀 7,305)
+      en: 0.20                       #   영어 사전에서 추첨한 n_english 개
+      num: 0.20                      #   9개 포맷으로 런타임 생성 (풀 없음)
+      rand: 0.15                     #   랜덤 음절 가짜단어 (논문 'random words')
+    punct_prob: 0.20                 # 토큰 뒤 구두점 . , ! ? … : ;   (코퍼스 실측 0.076)
+    wrap_prob: 0.05                  # 괄호·따옴표로 감싸기 () [] "" ''  (코퍼스 실측 0.001)
+    special_prob: 0.08               # % & @ # * + = / ~ $ 를 독립 토큰으로 추가
+    rand_len_weights: [0.15, 0.35, 0.30, 0.20]   # rand 토큰 음절수 1/2/3/4 분포
+    max_chars:                       # 라인 글자수 상한 (초과분은 단어 중간에서 잘림)
+      style: 40
+      gen: 130
+    n_english: 8000                  # 영어 후보 359,671 중 균등 추첨 개수
+    charset_rule: intersection       # intersection=전 폰트가 그리는 글자만(권장)
+                                     # union=하나라도 그리면 통과(렌더에서 조용히 삭제됨)
+
+val:
+  val_every: 0                       # N virtual step 마다 val loss (0=비활성)
+  val_fonts_dir: null                # null=학습 폰트에서 val_font_frac 만큼 분할
+  val_font_frac: 0.1                 # val 폰트는 학습에서 제외 → 폰트 일반화 측정
+  val_english_fonts_dir: null
+  val_samples: 0                     # val 세트 총 샘플 수 (0=val_batches × batch_size)
+  val_batches: 4
+  val_seed: 1234                     # 고정 → step 간 동일 샘플로 공정 비교
