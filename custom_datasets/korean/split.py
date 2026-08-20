@@ -196,7 +196,7 @@ def build_samplers(style_range, gen_range, seed=42, sampler_cfg=None, n_english=
     mk = lambda rng_, lo, hi, mc: G.MixedLineSampler(
         pools["ko"], pools["en"], cps, cfg["weights"], lo, hi, mc,
         cfg["punct_prob"], cfg["special_prob"], rng_, rand_syllables=syls,
-        wrap_prob=cfg["wrap_prob"], rand_len_weights=cfg["rand_len_weights"])
+        wrap_prob=cfg["wrap_prob"], rand_len=cfg["rand_len"])
     style_s = mk(rng, style_range[0], style_range[1], cfg["max_chars"]["style"])
     gen_s = mk(rng, gen_range[0], gen_range[1], cfg["max_chars"]["gen"])
     print(f"samplers: style {style_range} gen {gen_range} | ko {len(pools['ko'])} en {len(pools['en'])} "
@@ -256,7 +256,7 @@ def build_english_samplers(style_range, gen_range, fonts_dir, seed=42, sampler_c
     mk = lambda lo, hi, mc: G.MixedLineSampler(
         pools["ko"], pools["en"], cps, w, lo, hi, mc,
         cfg["punct_prob"], cfg["special_prob"], rng, rand_syllables=[],
-        wrap_prob=cfg["wrap_prob"], rand_len_weights=cfg["rand_len_weights"])
+        wrap_prob=cfg["wrap_prob"], rand_len=cfg["rand_len"])
     style_s = mk(style_range[0], style_range[1], cfg["max_chars"]["style"])
     gen_s = mk(gen_range[0], gen_range[1], cfg["max_chars"]["gen"])
     print(f"english samplers: style {style_range} gen {gen_range} | en {len(pools['en'])} cps {len(cps)} "

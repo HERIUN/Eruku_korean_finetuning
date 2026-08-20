@@ -22,6 +22,11 @@ HERE = Path(__file__).resolve().parents[1]   # 저장소 루트
 sys.path.insert(0, str(HERE))
 
 from configs import loader as _cfgloader
+
+#: style prefix 예산. get_model_inputs 는 style 을 이 값의 **절반**까지만 쓴다.
+#: 학습과 같은 값이어야 조건 분포가 어긋나지 않는다 → configs/{eval,infer}.yaml 의 max_img_len.
+#: 채택 ckpt(korean_en2ko_fixed)가 8192 로 학습됐다.
+DEFAULT_MAX_IMG_LEN = 8192
 from models.eruku import Emuru
 
 GOTHIC = str(HERE / "assets" / "fonts_label" / "NanumGothic-Regular.ttf")
@@ -121,7 +126,7 @@ def gen_arr(model, dec, ref_text, seed_text, cfg, max_new, style_px):
 
 @torch.no_grad()
 def gen_from_style(model, style_img, style_text, gen_text, cfg, max_new, device,
-                   max_img_len=2048, seed=None):
+                   max_img_len=DEFAULT_MAX_IMG_LEN, seed=None):
     """style 텐서([3,h,W] 또는 [1,3,h,W]) → 생성 라인이미지 [H,W] uint8.
 
     eval/실험 스크립트들이 반복하던 style → get_model_inputs → generate 블록.
@@ -135,7 +140,7 @@ def gen_from_style(model, style_img, style_text, gen_text, cfg, max_new, device,
 
 @torch.no_grad()
 def gen_from_style_batch(model, style_imgs, style_texts, gen_texts, cfg, max_new, device,
-                         max_img_len=2048, seed=None):
+                         max_img_len=DEFAULT_MAX_IMG_LEN, seed=None):
     """gen_from_style 의 배치판 — style 텐서 list → 생성 라인이미지 list([H,W] uint8).
 
     자기회귀 스텝을 배치 전체가 공유하므로 샘플당 비용이 크게 준다. 다만 스텝 수는
@@ -255,6 +260,9 @@ def main():
     ap.add_argument("--exclude-writers", nargs="*", default=["UlsanJunggu"],
                     help="montage writer(폰트) 후보에서 제외할 key. 기본: 깨진 글리프('델') 폰트 "
                          "UlsanJunggu (font_audit 참고). '#N' 접미사는 자동 무시하고 base 이름으로 비교.")
+    ap.add_argument("--max-img-len", type=int, default=8192,
+                    help="style prefix 예산(px). style 은 이 값의 절반까지만 쓰인다. "
+                         "학습 run 의 --max-img-len 과 맞춰야 조건 분포가 어긋나지 않음")
     ap.add_argument("--config", default=str(HERE / "configs/infer.yaml"),
                     help="설정 yaml. 우선순위 CLI > yaml > 코드 기본값 (configs/README.md)")
     args = _cfgloader.parse_args(ap, default_config=str(HERE / "configs/infer.yaml"), scopes=('common', 'show'))
@@ -283,7 +291,8 @@ def main():
     for i, w in enumerate(writers):
         ref = rng.choice(by_w[w])
         style_img = load_style(Path(ref["image_path"])).unsqueeze(0).to(device)
-        mi = model.get_model_inputs([style_img[0]], None, style_len=style_img.shape[-1], gen_len=None, max_img_len=2048)
+        mi = model.get_model_inputs([style_img[0]], None, style_len=style_img.shape[-1],
+                                    gen_len=None, max_img_len=args.max_img_len)
         dec = mi["decoder_inputs_embeds"].to(device); spx = dec.shape[1] * 8
 
         ref_arr = np.array(Image.open(ref["image_path"]).convert("L"))

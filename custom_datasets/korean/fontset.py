@@ -52,7 +52,7 @@ SAMPLER_DEFAULTS = {
     "punct_prob": 0.20,      # 토큰 뒤 구두점 (코퍼스 실측 0.076)          D9
     "wrap_prob": 0.05,       # 괄호·따옴표로 감싸기 (코퍼스 실측 0.001)    D9
     "special_prob": 0.08,    # 특수기호를 독립 토큰으로 추가
-    "rand_len_weights": [0.15, 0.35, 0.30, 0.20],   # rand 토큰의 음절 개수(1~4) 분포
+    "rand_len": [1, 4],      # rand 토큰의 음절 개수 범위 [min, max] — 균등 추첨
     "max_chars": {"style": 40, "gen": 130},          # 라인 글자수 상한(초과분은 단어 중간에서 절단) D3
     "n_english": 8000,       # english_words.txt 359,671 후보에서 균등 추첨할 개수  D4
     # covered_cps 규칙: "intersection"=전 폰트가 그리는 글자만(두부·조용한삭제 없음, 한글 기본) D8
@@ -131,7 +131,7 @@ class MixedLineSampler:
 
     def __init__(self, ko, en, covered_cps, weights, min_words, max_words,
                  max_chars, punct_prob, special_prob, rng, rand_syllables=None,
-                 wrap_prob=0.05, rand_len_weights=None):
+                 wrap_prob=0.05, rand_len=None):
         self.ko, self.en, self.cps = ko, en, covered_cps
         self.rand = rand_syllables or []
         self.min_words, self.max_words = min_words, max_words
@@ -139,7 +139,7 @@ class MixedLineSampler:
         # punct_prob=토큰 뒤 구두점 / wrap_prob=괄호·따옴표로 감싸기 / special_prob=기호 단독 토큰.
         # 셋 다 독립 확률. (구 코드는 감싸기를 punct_prob*0.4 로 유도했으나 근거 없는 상수였다)
         self.punct_prob, self.wrap_prob, self.special_prob = punct_prob, wrap_prob, special_prob
-        self.rand_len_w = list(rand_len_weights or SAMPLER_DEFAULTS["rand_len_weights"])
+        self.rand_len = tuple(rand_len or SAMPLER_DEFAULTS["rand_len"])
         avail = {"ko": ko, "en": en, "num": True, "rand": self.rand}
         self.cats = [c for c in ("ko", "en", "num", "rand")
                      if weights.get(c, 0) > 0 and avail[c]]
@@ -158,8 +158,8 @@ class MixedLineSampler:
             return self.rng.choice(self.ko)
         if cat == "en":
             return self.rng.choice(self.en)
-        if cat == "rand":   # 랜덤 음절 1~4글자 (기본 2~3글자 위주, rand_len_weights 로 조절)
-            n = self.rng.choices((1, 2, 3, 4), self.rand_len_w)[0]
+        if cat == "rand":   # 랜덤 음절 n글자 (rand_len 범위에서 균등)
+            n = self.rng.randint(*self.rand_len)
             return "".join(self.rng.choice(self.rand) for _ in range(n))
         for _ in range(4):
             t = gen_number(self.rng)

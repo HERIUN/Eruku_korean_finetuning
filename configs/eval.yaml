@@ -12,6 +12,9 @@ common:
   n: 100                 # 생성·측정할 샘플 수
   cfg: 1.0               # classifier-free guidance scale (1.0 = CFG 미사용)
   max_new_tokens: 480    # 생성 디코딩 상한 (긴 문장이 잘리면 키운다)
+  max_img_len: 8192      # style prefix 예산(px) — style 은 이 값의 **절반**까지만 쓰인다.
+                         # 채택 ckpt(korean_en2ko_fixed)가 8192 로 학습됐으므로 맞춘다.
+                         # (2026-08-20 이전에는 추론만 2048 하드코딩이라 style 이 1024px 에서 잘렸다)
   max_words: 15          # 평가 텍스트 어절수 상한
   seed: 0
   english: false         # true 면 영어 텍스트/라틴 폰트로 평가

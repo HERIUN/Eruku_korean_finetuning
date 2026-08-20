@@ -76,6 +76,9 @@ def main():
     ap.add_argument("--no-style-text", action=argparse.BooleanOptionalAction, default=False)
     ap.add_argument("--out", default=str(HERE / "finetune_runs" / "htr_cer.txt"))
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--max-img-len", type=int, default=8192,
+                    help="style prefix 예산(px). style 은 이 값의 절반까지만 쓰인다. "
+                         "학습 run 의 --max-img-len 과 맞춰야 조건 분포가 어긋나지 않음")
     ap.add_argument("--config", default=str(HERE / "configs/eval.yaml"),
                     help="설정 yaml. 우선순위 CLI > yaml > 코드 기본값 (configs/README.md)")
     args = _cfgloader.parse_args(ap, default_config=str(HERE / "configs/eval.yaml"), scopes=('common', 'htr_cer'))
@@ -99,7 +102,8 @@ def main():
         stext = "" if args.no_style_text else text
         try:
             gen = gen_from_style(model, style_tensor(gt), stext, text,
-                                 args.cfg, args.max_new_tokens, dev)
+                                 args.cfg, args.max_new_tokens, dev,
+                                 max_img_len=args.max_img_len)
         except Exception as e:
             print(f"  [skip] {e}"); continue
         hyp_gen = htr_read(htr, to_htr_input(gen, dev), dev)[0]

@@ -54,6 +54,9 @@ def main():
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--no-style-text", action=argparse.BooleanOptionalAction, default=False,
                     help="style_text 를 빈 문자열로 (style 이미지만으로 생성). echo 열도 gen 만 style 텍스트")
+    ap.add_argument("--max-img-len", type=int, default=8192,
+                    help="style prefix 예산(px). style 은 이 값의 절반까지만 쓰인다. "
+                         "학습 run 의 --max-img-len 과 맞춰야 조건 분포가 어긋나지 않음")
     ap.add_argument("--config", default=str(HERE / "configs/infer.yaml"),
                     help="설정 yaml. 우선순위 CLI > yaml > 코드 기본값 (configs/README.md)")
     args = _cfgloader.parse_args(ap, default_config=str(HERE / "configs/infer.yaml"), scopes=('common', 'matrix'))
@@ -77,7 +80,7 @@ def main():
         ref = rng.choice(by_w[w])
         style_img = load_style(Path(ref["image_path"])).unsqueeze(0).to(device)
         mi = model.get_model_inputs([style_img[0]], None, style_len=style_img.shape[-1],
-                                    gen_len=None, max_img_len=2048)
+                                    gen_len=None, max_img_len=args.max_img_len)
         dec = mi["decoder_inputs_embeds"].to(device); spx = dec.shape[1] * 8
         style_text_in = "" if args.no_style_text else ref["text"]
 

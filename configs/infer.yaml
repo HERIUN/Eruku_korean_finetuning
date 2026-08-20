@@ -16,6 +16,9 @@ common:
   device: cuda
 
 show:                       # infer/show.py — [스타일ref | 정답 | 생성 cfg…] 뷰어
+  max_img_len: 8192      # style prefix 예산(px) — style 은 이 값의 **절반**까지만 쓰인다.
+                         # 채택 ckpt(korean_en2ko_fixed)가 8192 로 학습됐으므로 맞춘다.
+                         # (2026-08-20 이전에는 추론만 2048 하드코딩이라 style 이 1024px 에서 잘렸다)
   out: _debug/show.png
   seed_text: 한국어 OCR 2024
   row_texts: null           # 행마다 다른 텍스트(미지정 시 seed_text 반복)
@@ -26,6 +29,7 @@ show:                       # infer/show.py — [스타일ref | 정답 | 생성 
   exclude_writers: [UlsanJunggu]   # 글리프가 깨진 폰트 제외 ('델' malformed)
 
 matrix:                     # infer/matrix.py — 스타일 × 텍스트 매트릭스
+  max_img_len: 8192         # show 와 동일 (release 는 릴리즈 클래스가 내부 처리라 인자 없음)
   out: _debug/matrix.png
   gen_texts: null           # 열에 쓸 텍스트들(미지정 시 기본 세트)
   cfg: 1.0
