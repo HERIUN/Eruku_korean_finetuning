@@ -431,7 +431,7 @@ def main():
     if args.config:      # 학습 config 의 data.sampler → 이 CLI 의 기본값 (CLI 로 준 값이 우선)
         import sys as _sys
         _sys.path.insert(0, str(HERE))
-        from train.config import load_config, flatten
+        from configs.loader import load_config, flatten
         scfg = sampler_config(flatten(load_config(args.config))[1])
         given = {a.split("=")[0].lstrip("-").replace("-", "_") for a in _sys.argv[1:] if a.startswith("--")}
         for dest, val in (("w_ko", scfg["weights"]["ko"]), ("w_en", scfg["weights"]["en"]),
