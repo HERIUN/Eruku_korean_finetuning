@@ -59,7 +59,7 @@ SOG/EOG/pad 는 마스크로 뺀다(`:314`). 반면 **CE 는 마스크가 없어
 
 ## 1. 학습 모듈이 요구하는 입력
 
-`custom_datasets.korean_split.split_collate` (`custom_datasets/korean_split.py:207`) 가 만드는 배치 dict가
+`custom_datasets.korean.split.split_collate` (`custom_datasets/korean/split.py:207`) 가 만드는 배치 dict가
 학습 루프가 요구하는 전부다. 외부 데이터로 갈아끼우려면 **이 6개 키만 맞추면 된다.**
 
 | 키 | 타입 | 설명 |
@@ -93,7 +93,7 @@ gen_text   = "곳 Pierro… 껄"                gen_img   [3, 64, 379]   gen_img
 **샘플 하나만 놓고 보면 얻을 수 있다.** 실제로 `split_collate` 가 하는 일이 정확히 그거다:
 
 ```python
-"style_img_len": [b["style_img"].shape[-1] for b in batch],   # custom_datasets/korean_split.py:214
+"style_img_len": [b["style_img"].shape[-1] for b in batch],   # custom_datasets/korean/split.py:214
 ```
 
 문제는 **그 시점이 배치로 묶이기 직전**이라는 것이다. 모델에 도착할 땐 이미 늦는다.
@@ -316,7 +316,7 @@ style 이미지의 필체를 그대로 가져와 새 텍스트를 썼다(`곳 Pi
 
 ```python
 from torch.utils.data import DataLoader
-from custom_datasets.korean_split import make_dataset, split_collate
+from custom_datasets.korean.split import make_dataset, split_collate
 from models.eruku import Emuru
 
 ds = make_dataset(style_range=(1, 8), gen_range=(1, 32), seed=42)   # 온라인 무한 합성

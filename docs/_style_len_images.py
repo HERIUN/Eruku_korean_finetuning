@@ -12,7 +12,7 @@ import torch
 from PIL import Image
 from diffusers import AutoencoderKL
 
-from custom_datasets.font_square.render_font import Render
+from custom_datasets.upstream.font_square.render_font import Render
 
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "img_style_len"; OUT.mkdir(exist_ok=True)

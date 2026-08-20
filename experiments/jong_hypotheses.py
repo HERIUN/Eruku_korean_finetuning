@@ -73,14 +73,14 @@ def corpus_counts():
 def train_exposure(seed=42):
     """학습 샘플러가 실제로 음절을 노출하는 기대량 (토큰 1개당 기대 등장 수).
 
-    `custom_datasets.korean_split.build_samplers` 의 구성을 그대로 재현해 해석적으로 계산한다:
+    `custom_datasets.korean.split.build_samplers` 의 구성을 그대로 재현해 해석적으로 계산한다:
       - 가중치 ko 0.45 / en 0.20 / num 0.20 / rand 0.15
       - ko 토큰 = `build_pools` 의 **고유** 한글 단어에서 균등 추출 (코퍼스 빈도 아님!)
       - rand 토큰 = 전 폰트 교집합 음절(KS X 1001 2350자)에서 균등, 길이 1~4(평균 2.55)
     → 노출 = 0.45 · (단어풀에서 그 음절이 나오는 총 횟수 / 단어 수) + 0.15 · 2.55 / |rand풀|
     """
     import json as _json, random as _random
-    import custom_datasets.korean_fontset as G
+    import custom_datasets.korean.fontset as G
     A = HERE / "assets"
     pools = G.build_pools(A / "corpus/korean_lines.txt", A / "corpus/chars.txt",
                           str(A / "corpus/english_words.txt"), 8000, _random.Random(seed))

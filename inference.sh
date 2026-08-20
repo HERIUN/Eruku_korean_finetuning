@@ -69,7 +69,7 @@ case "$cmd" in
   show)    run "$PY" infer/show.py "$@" ;;
   matrix)  run "$PY" infer/matrix.py "$@" ;;
   echo)    run "$PY" infer/echo_compare.py "$@" ;;
-  refset)  run "$PY" custom_datasets/korean_fontset.py "$@" ;;
+  refset)  run "$PY" custom_datasets/korean/fontset.py "$@" ;;
   release) run "$PY" tools/hf_upload.py "$@" ;;
   ""|-h|--help|help) usage ;;
   *) echo "알 수 없는 명령: $cmd" >&2; echo >&2; usage >&2; exit 1 ;;

@@ -18,7 +18,7 @@ Eruku(=Emuru 계열)는 **손글씨/폰트 스타일 전이(style transfer)** �
 | 경로 | 사용처 | 설명 |
 |------|--------|------|
 | **미리 렌더된 WebDataset** | 원본 대규모 사전학습(`train/eruku_continous.py`) | `font-square-pretrain-20M/{000000..002291}.tar` (2,292개 shard, 약 2천만 샘플)을 `wds.WebDataset`으로 읽음. 이미 렌더·증강된 PNG가 tar 안에 들어있음 |
-| **온라인 합성 (OnlineFontSquare)** | 그 20M tar를 **만드는 원천 로직** / 파인튜닝 / 소규모 실험 | `custom_datasets/font_square/` 의 Dataset이 `__getitem__` 호출 때마다 즉석에서 텍스트 샘플링 → 폰트 렌더 → 증강 |
+| **온라인 합성 (OnlineFontSquare)** | 그 20M tar를 **만드는 원천 로직** / 파인튜닝 / 소규모 실험 | `custom_datasets/upstream/font_square/` 의 Dataset이 `__getitem__` 호출 때마다 즉석에서 텍스트 샘플링 → 폰트 렌더 → 증강 |
 
 즉 tar는 결국 `OnlineFontSquare(_Split)` 파이프라인의 출력을 캐싱한 것이다.
 **"학습데이터를 어떻게 만드는가"의 본질은 `custom_datasets/font_square` 파이프라인**이므로 이 문서는 그것을 다룬다.
@@ -96,7 +96,7 @@ if len(txt) > max_len: txt = txt[:max_len]
 - **`GibberishSampler`** (`:318`) — 실제 단어가 아니라 charset에서 문자를 랜덤 추출(공백 확률 16%로 가장 높음). 모델이 "언어"가 아니라 "글자 모양"을 배우게 하는 무의미 문자열용.
 - **`FixedTextSampler`** (`:343`) — 항상 같은 문자열 반환(추론/디버깅용).
 
-> 참고: 이 fork의 한글 버전은 `TextSampler` 대신 `custom_datasets.korean_fontset.MixedLineSampler`(한글 음절+영어단어 혼합 라인 샘플러)를 끼워 넣는다(`custom_datasets/korean_split.py:126 build_samplers`). 샘플러만 교체될 뿐 렌더·증강 골격은 동일하다.
+> 참고: 이 fork의 한글 버전은 `TextSampler` 대신 `custom_datasets.korean.fontset.MixedLineSampler`(한글 음절+영어단어 혼합 라인 샘플러)를 끼워 넣는다(`custom_datasets/korean/split.py:126 build_samplers`). 샘플러만 교체될 뿐 렌더·증강 골격은 동일하다.
 
 ---
 
@@ -212,7 +212,7 @@ ds = OnlineSplitFontSquare(
 # 8. 한글판 (`KoreanSplitFontSquare`) — 여기서부터가 이 저장소
 
 §1~§7 은 **원본 upstream** 파이프라인이다. 한글판은 그 온라인 합성 경로를
-**서브클래스**(`custom_datasets/korean_split.py`)로 재사용하되 아래를 바꿨다.
+**서브클래스**(`custom_datasets/korean/split.py`)로 재사용하되 아래를 바꿨다.
 디스크에 미리 저장하지 않고 매 step 새로 합성하므로 모든 샘플이 unique 이고 사실상 무한 데이터셋이다.
 한 샘플 = `(style_img, style_text, gen_img, gen_text)` 4-tuple.
 
@@ -223,7 +223,7 @@ ds = OnlineSplitFontSquare(
 > 그림의 sampler 파라미터(`len_words=1,8` / `1,12`, `max_chars=40` / `130`)와 예시 텍스트·이미지는
 > `finetune_runs/eruku_short_fullmse` 실행(seed 15042) 기준이다. 어절 수 범위는 Phase 별로 다르고
 > `--style-words` / `--gen-words` 로 바뀐다(§8-2). `max_chars` 는 하드코딩
-> (`korean_split.py:140-143`).
+> (`korean/split.py:140-143`).
 
 ## 8-1. 폰트 = writer
 
@@ -243,7 +243,7 @@ ds = OnlineSplitFontSquare(
 ## 8-2. 텍스트 = `MixedLineSampler` 로 합성한 가짜 라인
 
 style 텍스트와 gen(target) 텍스트를 **각각 독립적으로**, 아래 비중으로 토큰을 섞어 1줄 생성
-(`custom_datasets/korean_split.py:65`, 원본 논문의 "English + random words" 를 한글로 확장):
+(`custom_datasets/korean/split.py:65`, 원본 논문의 "English + random words" 를 한글로 확장):
 
 | 토큰 종류 | 비중 | 출처 |
 |---|---|---|
@@ -262,14 +262,14 @@ style 텍스트와 gen(target) 텍스트를 **각각 독립적으로**, 아래 �
 
 1. style/gen 두 텍스트를 **같은 폰트**로 **각각 따로** 이미지 렌더 (높이 64px). 원본처럼
    한 장으로 합쳐 렌더하지 않으므로 경계가 존재하지 않는다.
-2. 증강 적용 (`custom_datasets/korean_split.py:37-60`) — **원본과 정책이 다르다**:
+2. 증강 적용 (`custom_datasets/korean/split.py:37-60`) — **원본과 정책이 다르다**:
    `RandomRotation(±3°, p=0.5)` 은 **style 에만**(gen 은 곧게), 배경은 **gen 흰색 강제**
    (style 만 종이배경), `ColorJitter` brightness=0, **`RandomWarping`(TPS 휨) 완전 제거**,
    `RandomInvert` 비활성. Blur·Dilation·AlphaChannel(잉크)·Jitter 는 **RNG 스냅샷으로
    style·gen 에 동일 실현**(같은 writer 질감 매칭).
 3. `style_img`(조건) / `gen_img`(target) 로 분리.
 
-- 데이터 sanity check: `uv run python custom_datasets/korean_split.py --n 8 --out /tmp/ksplit`
+- 데이터 sanity check: `uv run python custom_datasets/korean/split.py --n 8 --out /tmp/ksplit`
   → 8개 style/gen pair + montage 저장.
 - 단계별 이미지는 [`PIPELINE_STEP_BY_STEP.md`](PIPELINE_STEP_BY_STEP.md) 참고.
 - **이 파이프라인의 알려진 한계·미기록 동작·개선 후보는
@@ -282,12 +282,12 @@ style 텍스트와 gen(target) 텍스트를 **각각 독립적으로**, 아래 �
 |---|---|---|---|
 | **텍스트 소스** | `TextSampler`: 영어 단어만(nltk 6개 코퍼스 103,411단어), uni/bigram 빈도 가중 1종 sampler로 style·gen 동일 추첨 | `MixedLineSampler`: 한글0.45/영어0.20/숫자0.20/랜덤음절0.15 혼합 + 구두점·특수기호 부착. **폰트 charset 인지**(못 그리는 글자 미추첨 → tofu 방지) | 한글+숫자+기호 혼합 라인이 목표. 빈도편향 없이 전 음절 노출(랜덤음절) |
 | **style/gen sampler** | 단일 sampler → style·gen 어절수 범위 동일 | style/gen **독립 sampler**(범위 분리 가능: Phase1 2~3/2~3, Phase2 1~8/1~32) | 조건(style)과 타겟(gen) 길이를 따로 통제 |
-| **렌더 방식** | `[style\|gap\|gen]`을 **한 이미지로 합쳐 렌더** → 증강 → 고정 컬럼비로 분할 | style/gen을 **각각 따로 렌더**(경계 없음) | 원본은 회전·warp가 경계를 밀어 style↔gen 침범(잘림/잔상). 분리로 제거 (`custom_datasets/korean_split.py:80-123`) |
+| **렌더 방식** | `[style\|gap\|gen]`을 **한 이미지로 합쳐 렌더** → 증강 → 고정 컬럼비로 분할 | style/gen을 **각각 따로 렌더**(경계 없음) | 원본은 회전·warp가 경계를 밀어 style↔gen 침범(잘림/잔상). 분리로 제거 (`custom_datasets/korean/split.py:80-123`) |
 | **증강 정책** | 합친 이미지에 일괄: RandomRotation·**RandomWarping(TPS 휨)**·Blur·배경·Dilation·ColorJitter(bright=0.05)·**RandomInvert(p=0.2)** | **RandomWarping 완전 제거**, **RandomInvert 비활성**, RandomRotation은 **style만**(gen 곧게), 배경은 **gen 흰색 강제**(style만 종이배경), ColorJitter **brightness=0** | 모델 `generate()`가 흰배경·곧은 글자를 출력 → 타겟을 그렇게 학습해야 휨/배경이 전파 안 됨. style은 추론 시 실제 필기라 현실 증강 유지 |
 
 - **폰트(writer)**: 원본 font_square 영어 폰트 → **한글 손글씨/디스플레이 폰트 83종**.
 - `--legacy-transform` 플래그로 원본 composite(합쳐 렌더+일괄증강+경계분할) 방식을 그대로 재현 가능(전/후 비교 실험용).
-  이때만 `custom_datasets/font_square/font_square_split.py:180-189` 의 원본 증강(warp 포함)이 탄다.
+  이때만 `custom_datasets/upstream/font_square/font_square_split.py:180-189` 의 원본 증강(warp 포함)이 탄다.
 - 원본 대비 **동일하게 유지**한 것: 온라인 무한 생성(디스크 0), 높이 64px, VAE-latent split 구조,
   `p_uncond` 텍스트 dropout 메커니즘.
 

@@ -121,8 +121,8 @@ case "$cmd" in
   phase2) run "$PY" train/phase2.py "$@" ;;
   vae)    run "$PY" train/vae_korean.py "$@" ;;
   htr)    run "$PY" train/aux_htr.py "$@" ;;
-  data)   run "$PY" custom_datasets/korean_split.py "$@" ;;
-  refset) run "$PY" custom_datasets/korean_fontset.py "$@" ;;
+  data)   run "$PY" custom_datasets/korean/split.py "$@" ;;
+  refset) run "$PY" custom_datasets/korean/fontset.py "$@" ;;
   ""|-h|--help|help) usage ;;
   *) echo "알 수 없는 명령: $cmd" >&2; echo >&2; usage >&2; exit 1 ;;
 esac

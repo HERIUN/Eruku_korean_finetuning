@@ -54,7 +54,7 @@ except ImportError as e:
 echo "=== Build completed successfully! ==="
 echo ""
 echo "To use the optimized TPS module in your code:"
-echo "  from custom_datasets.font_square.tps.instance_optimized import TPSOptimized"
+echo "  from custom_datasets.upstream.font_square.tps.instance_optimized import TPSOptimized"
 echo "  # Use TPSOptimized instead of TPS for better performance"
 echo ""
 echo "To test performance improvements:"

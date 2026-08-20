@@ -37,7 +37,8 @@ DEFAULT_GEN_TEXTS = [
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", required=True)
+    ap.add_argument("--ckpt", required=True,
+                    help="로컬 .pth 경로 또는 HF repo id (예: HERIUN/eruku_korean)")
     ap.add_argument("--lines-json", default=str(HERE / "data" / "ref_set_clean" / "train_lines.json"))
     ap.add_argument("--out", default=str(HERE / "finetune_runs" / "matrix.png"))
     ap.add_argument("--gen-texts", nargs="+", default=None,

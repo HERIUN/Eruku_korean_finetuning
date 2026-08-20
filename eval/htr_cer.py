@@ -19,9 +19,9 @@ sys.path.insert(0, str(HERE))
 from infer.show import load_model, render_in_font, style_tensor, gen_from_style
 from eval.echo_metrics import build_texts, font_can_render
 from train.aux_htr import load_pretrained_htr, cer as char_cer
-from custom_datasets.korean_alphabet import get_korean_alphabet
-from custom_datasets.subsequent_mask import subsequent_mask
-from custom_datasets.korean_aux import _fit_width
+from custom_datasets.korean.alphabet import get_korean_alphabet
+from custom_datasets.upstream.subsequent_mask import subsequent_mask
+from custom_datasets.korean.aux import _fit_width
 
 ALPHA = get_korean_alphabet()
 
@@ -59,7 +59,8 @@ def norm(s):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", required=True)
+    ap.add_argument("--ckpt", required=True,
+                    help="로컬 .pth 경로 또는 HF repo id (예: HERIUN/eruku_korean)")
     ap.add_argument("--vae-checkpoint", default=None)
     ap.add_argument("--htr-checkpoint", default="finetune_runs/aux_htr_ko/htr_s20000")
     ap.add_argument("--fonts-dir", default=str(HERE / "assets/fonts_korean_v2/train"))

@@ -44,13 +44,13 @@ from diffusers import AutoencoderKL
 
 from models.smooth_ce import SmoothCrossEntropyLoss
 from models.teacher_forcing import NoisyTeacherForcing
-from custom_datasets.korean_alphabet import get_korean_alphabet
-from custom_datasets.korean_aux import KoreanAuxDataset, aux_collate
+from custom_datasets.korean.alphabet import get_korean_alphabet
+from custom_datasets.korean.aux import KoreanAuxDataset, aux_collate
 from train.aux_htr import load_pretrained_htr
 
 
 from infer.show import render_in_font
-from custom_datasets.korean_aux import _fit_width, H as _AUXH
+from custom_datasets.korean.aux import _fit_width, H as _AUXH
 
 # 영어 회귀 모니터용 고정 probe (held-out 폰트로 라틴 렌더). full 학습 중 영어 recon 유지 확인.
 _TEST_FONTS = HERE / "assets" / "fonts_korean_v2" / "test"
@@ -281,7 +281,7 @@ def main():
     # 폰트 단위 train/val 분할: val 폰트는 학습에서 제외(--val-fonts-dir 지정 시엔 분할 안 함)
     train_fonts = val_fonts = None
     if not args.val_fonts_dir and args.val_font_frac > 0:
-        from custom_datasets.korean_split import split_train_fonts
+        from custom_datasets.korean.split import split_train_fonts
         train_fonts, val_fonts = split_train_fonts(args.val_font_frac, seed=args.seed,
                                                    fonts_dir=args.train_fonts_dir)
         print(f"폰트 분할: train {len(train_fonts)} / val {len(val_fonts)} "

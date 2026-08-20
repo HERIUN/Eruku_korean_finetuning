@@ -8,8 +8,8 @@ import numpy as np
 import torch
 from PIL import Image, ImageDraw
 
-from custom_datasets.font_square import font_transforms_split as FT
-from custom_datasets.font_square.font_square_split import make_renderers, get_fonts
+from custom_datasets.upstream.font_square import font_transforms_split as FT
+from custom_datasets.upstream.font_square.font_square_split import make_renderers, get_fonts
 
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "img_pipeline"

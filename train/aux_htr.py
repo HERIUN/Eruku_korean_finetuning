@@ -3,7 +3,7 @@
 원본 emuru VAE 학습의 가독성 핵심 = frozen HTR(OCR) loss. 그 HTR 은 라틴 전용(alphabet 167).
 여기서 pretrained HTR 을 **warm-start** 로 한글에 finetune 한다:
   - `text_embedding`(입력)·`fc`(출력)를 한글 alphabet 크기로 **확장**하되, 라틴 인덱스(0..166)는
-    pretrained 가중치 그대로 유지(custom_datasets.korean_alphabet 인덱스 규약) → 라틴 지식 전이.
+    pretrained 가중치 그대로 유지(custom_datasets.korean.alphabet 인덱스 규약) → 라틴 지식 전이.
   - feature_extractor/transformer 는 pretrained 그대로 이어서 학습.
 과제: bw(clean 1ch) 이미지 → 텍스트(AR 디코딩). loss=SmoothCE + NoisyTeacherForcing. metric=CER.
 
@@ -32,8 +32,8 @@ sys.path.insert(0, str(HERE))
 from models.htr import HTR
 from models.smooth_ce import SmoothCrossEntropyLoss
 from models.teacher_forcing import NoisyTeacherForcing
-from custom_datasets.korean_alphabet import get_korean_alphabet
-from custom_datasets.korean_aux import KoreanAuxDataset, aux_collate
+from custom_datasets.korean.alphabet import get_korean_alphabet
+from custom_datasets.korean.aux import KoreanAuxDataset, aux_collate
 
 
 def load_pretrained_htr(path: Path) -> HTR:

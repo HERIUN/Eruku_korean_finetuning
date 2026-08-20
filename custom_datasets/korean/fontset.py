@@ -15,7 +15,7 @@ dilation/erosion) 를 grayscale 단독 구현으로 미러링한다. torch/compi
   - person_key = 폰트 식별자 → 같은 폰트의 다른 이미지가 style/same 페어가 됨
 
 Usage:
-  python custom_datasets/korean_fontset.py \
+  python custom_datasets/korean/fontset.py \
       --fonts-dir ../fonts_korean_v2 \
       --corpus ../font_ai_pipeline_work/benchmark/train_lines.json \
       --bg-dir ../font_ai_pipeline_work/bg_textrenderer \
@@ -363,7 +363,7 @@ def save_montage(rows: list[dict], path: Path, n: int = 12):
 
 def main():
     ap = argparse.ArgumentParser()
-    HERE = Path(__file__).resolve().parents[1]   # 저장소 루트
+    HERE = Path(__file__).resolve().parents[2]   # 저장소 루트
     ap.add_argument("--fonts-dir", default=str(HERE / "assets" / "fonts_korean_v2"))
     ap.add_argument("--corpus", default=str(HERE / "assets" / "corpus" / "korean_lines.txt"))
     ap.add_argument("--extra-chars", default=str(HERE / "assets" / "corpus" / "chars.txt"))
@@ -387,9 +387,9 @@ def main():
     ap.add_argument("--w-rand", type=float, default=0.0,
                     help="랜덤 음절 가짜단어 비중 (오프라인 ref set 은 기본 0; 온라인 학습은 0.15)")
     ap.add_argument("--punct-prob", type=float, default=0.20,
-                    help="토큰 뒤에 구두점 붙일 확률 (코퍼스 실측 7.6%)")
+                    help="토큰 뒤에 구두점 붙일 확률 (코퍼스 실측 7.6%%)")
     ap.add_argument("--wrap-prob", type=float, default=0.05,
-                    help="토큰을 괄호·따옴표로 감쌀 확률 (코퍼스 실측 0.1%)")
+                    help="토큰을 괄호·따옴표로 감쌀 확률 (코퍼스 실측 0.1%%)")
     ap.add_argument("--special-prob", type=float, default=0.08, help="특수기호 단독 삽입 확률")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--no-augment", action="store_true",

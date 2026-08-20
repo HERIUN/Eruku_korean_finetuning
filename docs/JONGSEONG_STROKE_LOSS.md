@@ -197,7 +197,7 @@ R² = 0.327.
 ### ⚠️ 정정: 코퍼스 빈도 ≠ 학습 노출량
 
 처음엔 `assets/corpus` 의 **토큰 빈도**를 노출 대리변수로 썼는데 **틀렸다**. 학습 샘플러
-(`custom_datasets.korean_fontset.MixedLineSampler`, `custom_datasets.korean_split.build_samplers`)는 코퍼스 빈도를
+(`custom_datasets.korean.fontset.MixedLineSampler`, `custom_datasets.korean.split.build_samplers`)는 코퍼스 빈도를
 쓰지 않는다:
 
 - `build_pools` 가 코퍼스에서 단어를 **`set` 으로** 모은다 → 빈도 정보가 그 시점에 소멸
@@ -439,7 +439,7 @@ byT5 는 바이트 단위라 **vocab 변경·임베딩 리사이즈 불필요**.
 
 ### C2. 겹받침 노출 상향 (샘플러) — 저비용 병행
 
-**무엇**: `custom_datasets.korean_split.build_samplers` 의 `rand` 풀을 종성 균등으로 바꾸거나
+**무엇**: `custom_datasets.korean.split.build_samplers` 의 `rand` 풀을 종성 균등으로 바꾸거나
 `rand` 가중치(현재 0.15)를 올린다. 현재 겹받침 실 노출은 홑받침의 0.52배.
 
 **기대치는 낮게 잡을 것**: 노출을 통제해도 격차가 +0.19 남았다 → 노출만으로는 한계가 명확하다.

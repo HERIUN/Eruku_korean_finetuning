@@ -1,12 +1,12 @@
 """repo OnlineSplitFontSquare 를 한글로 사용 (온라인 style/gen split 렌더).
 
 - style/gen 텍스트를 각각 다른 단어수 범위로 샘플 (Phase1: 둘 다 2~4 / Phase2: style 1~8, gen 1~32)
-- 한글 mixed-script sampler (custom_datasets.korean_fontset.MixedLineSampler 재사용, 전역 covered=폰트 union)
+- 한글 mixed-script sampler (custom_datasets.korean.fontset.MixedLineSampler 재사용, 전역 covered=폰트 union)
 - 폰트별 charset 필터(fonts_charsets.json)로 tofu 방지
 - 무한 온라인 (디스크 0). 학습 샘플 저장은 dump_samples() 사용.
 
 CLI 테스트:
-  python custom_datasets/korean_split.py --n 8 --style 1 8 --gen 2 16 --out /tmp/ksplit
+  python custom_datasets/korean/split.py --n 8 --style 1 8 --gen 2 16 --out /tmp/ksplit
 """
 from __future__ import annotations
 import sys, random, json, argparse
@@ -14,13 +14,13 @@ from pathlib import Path
 import numpy as np, torch, cv2
 from PIL import Image, ImageDraw, ImageFont
 
-HERE = Path(__file__).resolve().parents[1]   # 저장소 루트
+HERE = Path(__file__).resolve().parents[2]   # 저장소 루트
 ASSETS = HERE / "assets"
 sys.path.insert(0, str(HERE))
-import custom_datasets.korean_fontset as G
-from custom_datasets.font_square.font_square_split import OnlineSplitFontSquare
-from custom_datasets.font_square import font_transforms_split as FT
-from custom_datasets.font_square import font_transforms as FTN  # 단일 텍스트(비-split) 증강
+from custom_datasets.korean import fontset as G
+from custom_datasets.upstream.font_square.font_square_split import OnlineSplitFontSquare
+from custom_datasets.upstream.font_square import font_transforms_split as FT
+from custom_datasets.upstream.font_square import font_transforms as FTN  # 단일 텍스트(비-split) 증강
 from torchvision import transforms as T
 
 

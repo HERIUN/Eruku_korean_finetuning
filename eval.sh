@@ -15,13 +15,15 @@
 # 환경변수
 #   GPU=2         쓸 GPU (기본 0)
 #   DRY=1         실행하지 않고 커맨드만 출력
-#   CKPT=...      best 외 다른 체크포인트로 `best` 를 돌릴 때
+#   CKPT=...      best 외 다른 체크포인트로 `best` 를 돌릴 때 (로컬 .pth 또는 HF repo id)
+#   HF_REPO=...   로컬 ckpt 가 없을 때 쓸 발행본 (기본 HERIUN/eruku_korean)
 #   PY=...        python 실행기 (기본 ./.venv/bin/python)
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PY="${PY:-$ROOT/.venv/bin/python}"
 GPU="${GPU:-0}"
 CKPT="${CKPT:-finetune_runs/eruku_short_fullmse/checkpoint_step_030000.pth}"
+HF_REPO="${HF_REPO:-HERIUN/eruku_korean}"
 cd "$ROOT"
 
 run() {
@@ -32,9 +34,11 @@ usage() { awk 'NR>1 && /^#/ {sub(/^# ?/, ""); print; next} NR>1 {exit}' "$0"; }
 
 eval_best() {
   if [ ! -e "$CKPT" ]; then
-    echo "체크포인트가 없다: $CKPT" >&2
-    echo "  → ./train.sh best status 로 재현 단계를 확인하거나, CKPT=<경로> 로 지정할 것" >&2
-    exit 1
+    # 발행본은 로컬 best ckpt 와 가중치가 동일(t5_to_ocr 제외 773키 bit-identical)하므로
+    # 재현 검증에 그대로 쓸 수 있다. inference.sh best 와 같은 폴백.
+    echo "로컬 체크포인트 없음($CKPT) → HF 발행본 $HF_REPO 로 검증한다." >&2
+    echo "  (로컬 ckpt 로 돌리려면 ./train.sh best status 참고, 또는 CKPT=<경로>)" >&2
+    CKPT="$HF_REPO"
   fi
   cat <<'EOF'
 best 모델 재현 검증 — 아래 수치가 나와야 한다 (README 「결과 요약」/ docs/EXPERIMENTS.md §5)

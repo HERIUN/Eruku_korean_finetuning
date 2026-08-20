@@ -167,7 +167,7 @@ PYTHONPATH=. .venv/bin/python docs/_verify_style_len.py
 
 ## 관련 버그: 이중정규화 (`_img_encode`)  — 2026-07 수정
 
-`custom_datasets/korean_split.py --show-model-input`(dump_samples 의 '모델이 받는 style' 복원 열)으로
+`custom_datasets/korean/split.py --show-model-input`(dump_samples 의 '모델이 받는 style' 복원 열)으로
 파이프라인을 검증하다 발견. **style-len(위)과는 별개**의 전처리 단위 문제.
 
 - **증상:** `_img_encode` 가 이미 `[-1,1]` 인 입력(dataset `t_norm` / infer `style_tensor` 모두
@@ -183,5 +183,5 @@ PYTHONPATH=. .venv/bin/python docs/_verify_style_len.py
 - **수정:** `_img_encode` 에서 `self.normalize(img)` 제거 → VAE 가 정상 `[-1,1]` 입력을 받음.
   재구성/조건 품질 정상화. **재학습 시 반영**(style-len 재학습과 동일 시점).
 
-→ 데이터 파이프라인 검증 도구: `uv run python custom_datasets/korean_split.py --n 8 --show-model-input --out /tmp/ks`
+→ 데이터 파이프라인 검증 도구: `uv run python custom_datasets/korean/split.py --n 8 --show-model-input --out /tmp/ks`
   (각 행에 '모델이 실제로 받는 style' 복원 열 → style-len fix·정규화가 반영됐는지 눈으로 확인)

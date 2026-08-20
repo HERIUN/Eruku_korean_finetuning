@@ -152,18 +152,51 @@ def gen_from_style_batch(model, style_imgs, style_texts, gen_texts, cfg, max_new
     return [crop_gen(im, sp, el * 8) for im, sp, el in zip(imgs, specials, lens)]
 
 
+def _hf_release_state(repo):
+    """발행본(HF repo)의 가중치를 **로컬 학습 클래스용** state_dict 로 가져온다.
+
+    릴리즈 state_dict 는 로컬 것에서 `t5_to_ocr.*`(alpha=1.0 이라 미사용) 한 종류만 뺀 것이고
+    나머지 키 이름은 동일하다(`tools/hf_upload.py:657`) → `strict=False` 로 그대로 얹힌다.
+    `vae.*` 252키도 들어 있어 페어 한글 VAE 가 같이 따라온다.
+
+    ★ `docs/RELEASE.md` 의 style prefix 크롭 규약 차이는 릴리즈 **클래스**
+      (`modeling_eruku.generate_handwriting` 가 내부에서 자르는 동작) 얘기라 여기선 무관하다.
+      여기서 쓰는 건 가중치뿐이고 크롭은 로컬 규약(`crop_gen`, special 첫 SOG 기준)으로 돈다.
+    """
+    from huggingface_hub import hf_hub_download
+    from safetensors.torch import load_file
+    cfg = json.loads(Path(hf_hub_download(repo, "config.json")).read_text(encoding="utf-8"))
+    return load_file(hf_hub_download(repo, "model.safetensors")), cfg.get("vae_name_or_path")
+
+
 def load_model(ckpt, device, vae_checkpoint=None):
-    """Emuru 모델 로드 + 체크포인트 적용. (infer.show/infer.matrix 공용)
+    """Emuru 모델 로드 + 체크포인트 적용. (infer.show/infer.matrix/eval.* 공용)
+
+    ckpt 는 **로컬 `.pth` 경로 또는 HF repo id**(`HERIUN/eruku_korean`) 둘 다 받는다.
+    로컬 파일이 없고 `owner/name` 꼴이면 발행본으로 간주해 내려받는다 → 새 클론에서
+    학습 없이도 `eval.*` / `infer.show` 가 돈다.
 
     vae_checkpoint 를 주면 그 VAE 로 모델을 만들고, **ckpt 의 옛 vae.\\* 키를 strip** 해서
     새 VAE 가 덮이지 않게 한다(한글 적응 VAE 교체 검증용; ckpt.model 에 옛 vae.* 252키가 있음).
-    안 주면 기존 동작(default emuru_vae, ckpt 의 vae.* 그대로 로드).
+    안 주면 ckpt 의 vae.* 를 그대로 쓴다(발행본이면 config 의 페어 VAE 로 모델을 만든다).
     """
-    vae_ck = vae_checkpoint or "blowing-up-groundhogs/emuru_vae"
+    ck, hf_vae = {}, None
+    if Path(ckpt).exists():
+        ck = torch.load(ckpt, map_location="cpu", weights_only=False)
+        st = ck["model"] if "model" in ck else ck
+    elif str(ckpt).count("/") == 1 and not str(ckpt).endswith(".pth"):
+        st, hf_vae = _hf_release_state(str(ckpt))
+        ck = {"step": f"hf:{ckpt}"}
+        print(f"[load_model] 로컬 파일 없음 → HF 발행본 {ckpt} 로드 (vae={hf_vae})")
+    else:
+        raise FileNotFoundError(f"체크포인트를 못 찾음: {ckpt} "
+                                "(로컬 .pth 경로 또는 HF repo id 'owner/name')")
+
+    # ★ VAE 는 state 를 본 뒤에 만든다 — 발행본은 config 가 페어 한글 VAE 를 가리키므로,
+    #   먼저 기본 VAE 를 받아놓으면 어차피 vae.* 로 덮일 가중치를 헛으로 내려받게 된다.
+    vae_ck = vae_checkpoint or hf_vae or "blowing-up-groundhogs/emuru_vae"
     model = Emuru(t5_checkpoint="google-t5/t5-large", vae_checkpoint=vae_ck).to(device)
     model.alpha = 1.0
-    ck = torch.load(ckpt, map_location="cpu", weights_only=False)
-    st = ck["model"] if "model" in ck else ck
     if any(k.startswith("module.") for k in st):
         st = {k[len("module."):]: v for k, v in st.items()}
     if vae_checkpoint:  # 새 VAE 유지: ckpt 의 옛 vae.* 제거
@@ -183,7 +216,8 @@ def load_model(ckpt, device, vae_checkpoint=None):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", required=True)
+    ap.add_argument("--ckpt", required=True,
+                    help="로컬 .pth 경로 또는 HF repo id (예: HERIUN/eruku_korean)")
     ap.add_argument("--vae-checkpoint", default=None,
                     help="한글 적응 VAE(vae_sXXXX) 로 교체해 생성. 주면 ckpt 의 옛 vae.* 를 strip")
     ap.add_argument("--lines-json", default=str(HERE / "data" / "korean_fontset_v2" / "train_lines.json"))

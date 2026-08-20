@@ -27,7 +27,7 @@ from eval.echo_metrics import build_texts, font_can_render
 from eval.htr_cer import to_htr_input, htr_read, norm
 from train.aux_htr import load_pretrained_htr
 from jong_stroke_loss import decompose, jong_group  # noqa: E402
-from custom_datasets.korean_alphabet import load_charset  # noqa: E402
+from custom_datasets.korean.alphabet import load_charset  # noqa: E402
 
 GROUPS = ("없음", "홑받침", "쌍받침(ㄲㅆ)", "겹받침(ㄳㄵ…)")
 
@@ -63,7 +63,7 @@ def build_natural_jong(n_lines, rng, per_line_cluster=2, per_line_other=2):
     그 사이를 메운다 — **어휘는 실제 단어 그대로 두고 겹받침 포함 단어만 골라** 표본을 키운다.
     한 라인에 겹받침 단어와 일반 단어를 섞으므로 대조군(홑받침/없음)이 같은 이미지에서 나온다.
     """
-    import custom_datasets.korean_fontset as G
+    import custom_datasets.korean.fontset as G
     A = HERE / "assets"
     ko = G.build_pools(A / "corpus/korean_lines.txt", A / "corpus/chars.txt",
                        str(A / "corpus/english_words.txt"), 0, rng)["ko"]

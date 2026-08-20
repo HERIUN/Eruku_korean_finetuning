@@ -30,7 +30,7 @@ from PIL import Image, ImageDraw, ImageFont
 from diffusers import AutoencoderKL
 
 from common import REPO as HERE, load_line_x11, roundtrip
-from custom_datasets.korean_alphabet import load_charset
+from custom_datasets.korean.alphabet import load_charset
 
 H = 64
 CHO = "ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ"

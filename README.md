@@ -1,5 +1,10 @@
 # Eruku Korean Fine-tuning
 
+[![🤗 Demo](https://img.shields.io/badge/🤗%20Demo-Try%20it%20on%20Spaces-0B93F6)](https://huggingface.co/spaces/HERIUN/eruku_korean_demo)
+[![🤗 Model](https://img.shields.io/badge/🤗%20Model-eruku__korean-FFD21E)](https://huggingface.co/HERIUN/eruku_korean)
+[![🤗 VAE](https://img.shields.io/badge/🤗%20VAE-emuru__vae__korean-FFD21E)](https://huggingface.co/HERIUN/emuru_vae_korean)
+[![arXiv](https://img.shields.io/badge/arXiv-2510.23240-B31B1B)](https://arxiv.org/abs/2510.23240)
+
 [Eruku](https://github.com/Blowing-Up-Groundhogs/Eruku) (autoregressive styled handwriting
 generation, [arxiv 2510.23240](https://arxiv.org/abs/2510.23240)) 를 **한글 손글씨 라인
 이미지 생성**으로 fine-tuning 하는 프로젝트.
@@ -14,14 +19,14 @@ generation, [arxiv 2510.23240](https://arxiv.org/abs/2510.23240)) 를 **한글 �
 
 | 한계 | 실측 | 어떻게 대처하나 |
 |---|---|---|
-| **실제 사람 손글씨 스타일은 재현도가 낮다** (writer 다양성 부족도 같은 원인) | 학습 writer 가 전부 **폰트**다 — 한글 **83종** + 라틴 177종(held-out 16종은 평가 전용)이고 upstream 은 ~100k writer. 릴리즈 모델은 `online_split`(폰트 합성)으로만 학습했고 실제 손글씨 데이터(HanDB 등, 코드는 있음)는 **안 썼다** | 폰트는 같은 글자를 항상 같게 쓰지만 사람 손은 매번 다르다 — 글자마다 달라지는 흔들림·연결·필압을 **배운 적이 없다**. 실제 손글씨를 style 로 주면 (bbox 크롭 후) 읽히기는 해도 그 사람 필체의 재현도는 폰트 style 대비 확실히 떨어지고, 처음 보는 극단 장식/붓 계열 폰트도 품질이 떨어진다. 스타일 일반화 기대치를 낮출 것 |
-| **단문이 제일 약하다** | 한글 CER 단문(1~3어절) **0.269** vs 장문(9~15) 0.060 — 4.5배 | 짧은 문구가 목적이면 지금 품질로는 부족. latent 열이 적어 자기회귀 문맥이 모자란 게 원인 |
-| **VAE 재구성이 하드상한** | 한글 재구성 오차 = 영어의 **~12배**. 획 밀집 음절(형·꽃·활짝)에서 뭉개짐 | 학습을 늘려도 안 넘는다. 올리려면 VAE 를 손대야 함 ([§3](docs/EXPERIMENTS.md)) |
+| **실제 사람 손글씨 스타일은 재현도가 낮다** (writer 다양성 부족도 같은 원인) | 학습 writer 가 전부 **폰트**다 — 한글 **83종** + 라틴 177종(held-out 16종은 평가 전용)이고 pretrained upstream 은 english ~100k writer. 릴리즈 모델은 `online_split`(폰트 합성)으로만 학습했고 실제 손글씨 데이터는 **안 썼다** | 실제 손글씨를 style 로 주면 (bbox 크롭 후) 그 사람 필체와 비슷한 학습된 폰트체로 재현된다. |
+| **생성 문구가 짧으면 약하다** | 한글 CER 단문(1~3어절) **0.269** vs 장문(9~15) 0.060 — 4.5배 | 짧은 문구가 목적이면 지금 품질로는 부족. latent 열이 적어 자기회귀 문맥이 모자란 게 원인 |
+| **VAE 한글 재구성이 하드상한** | 한글 재구성 오차 = 영어의 **~12배**. 획 밀집 음절(형·꽃·활짝)에서 뭉개짐 | 학습을 늘려도 안 넘는다. 올리려면 VAE 를 손대야 함 ([§3](docs/EXPERIMENTS.md)) |
 | **획 하나 차이인 자모끼리 섞인다** — 겹받침 · 쌍자음 · ㅑㅕㅛㅠ | 통제 조건(균등 음절, `experiments/jong_gen_loss.py`) 생성 **오류율**(전부 높을수록 나쁨, 각자의 대조군 대비 배율로 볼 것 — 앞 둘은 자모 단위, 겹받침은 음절 단위라 절대값끼리는 비교 불가): 자모 오류율 **ㅑㅕㅛㅠ 0.260** vs ㅏㅓㅗㅜ 0.135(**1.9배**), **쌍자음 ㄲㄸㅃㅆㅉ 0.166** vs 평자음 0.130(**1.3배**); 음절 오류율 **겹받침 0.507** vs 홑받침 0.289(**1.8배**, = 음절정확도 0.493 vs 0.711). 실제 혼동쌍 상위: ㅆ→ㅅ, ㄻ→ㄹ, ㅓ→ㅕ, ㅑ→ㅏ, ㄺ→ㄹ | 획을 하나 더/덜 그리는 쪽으로 무너진다 — 원인은 자모 종류가 아니라 **글리프 밀도**. 획 하나로 뜻이 갈리는 텍스트(있다/잇다, 사고/사교)는 검수 필요 ([JONGSEONG](docs/JONGSEONG_STROKE_LOSS.md)) |
 | **style 이미지에 여백이 있으면 생성이 무너진다** (위와 별개 원인 — 입력 조건 쪽) | 상하좌우 여백(**주로 좌우 마진**)이 latent std 를 폰트(0.014~0.022)의 **6~29배(0.13~0.42)** 로 튀겨 T5 조건이 OOD → runaway/blank. 학습이 글자가 프레임을 꽉 채운 style 만 봐서 "작은 글자 + 큰 여백"을 한 번도 못 봤다 | 스캔이라서가 아니라 **여백 때문**이다 — 여백 없이 잘라 넣으면 스캔도 문제없다. `--bbox-crop`(밀도 기반 잉크 bbox 크롭, 단순 min/max 는 테두리·노이즈에 취약)으로 해결되고 적용 시 4모델×8샘플 32/32 legible ([VAE_ROBUSTNESS](docs/VAE_ROBUSTNESS.md)) |
-| **흰 배경 · 검은 글씨 · 곧은 글자만 나온다** | gen(타깃) 증강 정책이 그렇게 고정돼 있다 — **흰 배경 강제**, RandomRotation 은 **style 에만**(gen 은 곧게), RandomWarping(TPS 휨) 완전 제거, ColorJitter brightness=0, RandomInvert 비활성. 출력도 1채널 그레이스케일 | 종이 질감·색 잉크·배경·**기울기(이탤릭)·휨**은 **모델이 못 만든다**. style 이미지가 기울어져 있거나 배경이 있어도 글자 모양만 전달되고 기울기·배경은 안 따라온다 — 필요하면 생성 후 합성·변형으로 입힐 것 |
-| **필압·농담을 못 살린다** | VAE 가 잉크 농도를 무시하고 항상 crisp 순검정으로 snap(프로토타입 붕괴) | 연필/흐린 획 스타일은 재현 불가. 수정하려면 VAE 재학습 |
-| **생성물 앞머리(첫 글자)가 불안정** | 앞머리에 목표에 없는 글자·artifact 가 붙는 비율 **10.0%**(style_text 채움) / **26.7%**(빈값). n=60, `experiments/style_echo_check.py` | 예전엔 **style 텍스트 꼬리가 그대로 앞에 붙는** 버그였지만 SOG 기준 크롭으로 잡혔다 — 지금 style 꼬리와 일치하는 잔재는 1.7%(60개 중 1개)뿐이고, 남은 건 앞머리 생성 자체의 불안정이다. **`style_text` 를 채우면 오히려 절반 이하로 준다** |
+| **흰 배경 · 검은 글씨만 나온다** | 원인이 **두 겹**이다. ① gen(타깃) 증강 정책 — **흰 배경 강제**, RandomRotation 은 **style 에만**, ColorJitter brightness=0, RandomInvert 비활성. ② **VAE 가 배경을 latent 에 아예 안 싣는다** — `styled RGB → clean B/W` 로 학습됐고 config 부터 `in_channels=3 / out_channels=1`(항등 재구성이면 나올 수 없는 조합) | 종이 질감·색 잉크·배경은 **모델이 못 만든다**. ②때문에 style 이미지에 배경·기울기가 있어도 **VAE encoder 단계에서 벗겨져** 글자 모양만 전달된다(italic 폰트의 기울기는 폰트 자체의 shape 라 재현 가능). 필요하면 생성 후 합성으로 입힐 것 |
+| **필압·농담을 못 살린다** | VAE 학습이 **항등 재구성이 아니다** — 입력은 잉크 `alpha∈[0.75,1]`·종이배경·blur·밝기지터를 입힌 `rgb`, 정답은 증강 없는 clean `bw` 이고 loss 가 `\|rec − bw\|`(`train/vae_korean.py:371`, 두 장은 같은 렌더에서 갈라져 **shape 만 공유**). 즉 "흐린 획을 최대 농도로 되돌려라"를 명시적으로 학습한다 | 연필/흐린 획 스타일은 재현 불가. **버그가 아니라 설계**다 — T5 가 회귀할 latent 에서 스타일 노이즈를 걷어내려는 것. 바꾸려면 정답을 농도 보존 이미지로 두고 VAE 재학습 + latent 이동분만큼 T5 재적응(`--reset-vae`)이 따라온다 |
+| **생성물 앞머리(첫 글자)가 불안정** | 앞머리에 목표에 없는 글자·artifact 가 붙는 비율 **10.0%**(style_text 사용시) / **26.7%**(빈값). n=60, `experiments/style_echo_check.py` | 예전엔 **style 텍스트 꼬리가 그대로 앞에 붙는** 버그였지만 SOG 기준 크롭으로 잡혔다 — 지금 style 꼬리와 일치하는 잔재는 1.7%(60개 중 1개)뿐이고, 남은 건 앞머리 생성 자체의 불안정이다. **`style_text` 를 채우면 오히려 절반 이하로 준다** |
 | **생성이 run-to-run 재현 안 됨** | 같은 입력 2회에 픽셀 maxdiff 221, n=24 CER 0.035/0.031/0.074 | 비교·판정은 **n≥100 페어링**으로만. 단발 수치로 채택/기각 금지 |
 | **긴 영어 문장이 약하다** | 한글이 타깃이고 영어는 15% 혼합으로 유지만 한다. 긴 영어에서 반복붕괴 경향([§2](docs/EXPERIMENTS.md) 정성 관찰) | 영어 위주 용도면 원본 `blowing-up-groundhogs/eruku` 를 쓸 것 |
 
@@ -72,48 +77,17 @@ DRY=1 ./train.sh best all               # 실행 않고 커맨드만 출력
 
 ### 🎯 현재 best 모델 재현
 
-배포본 `finetune_runs/eruku_short_fullmse/checkpoint_step_030000.pth` 를 만든 **실제 순서**
-(각 run 의 `train_config.yml` 기록 기준)를 7단계로 박아뒀다. 근거·수치는
-[`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) §4·§5.
-
 ```bash
 ./train.sh best status    # 7단계 + 각 산출물이 이미 있는지 표시
-./train.sh best 7         # 한 단계만 (번호 또는 이름: short)
 ./train.sh best all       # 없는 단계만 순서대로 (GPU 수십 시간)
-./eval.sh  best           # 재현 검증 — 아래 기대 수치를 같이 출력한다
+./eval.sh  best           # 재현 검증 — 기대 수치를 같이 출력 (로컬 ckpt 없으면 발행본으로 폴백)
 ./inference.sh best       # 눈으로 확인 (생성 그리드 PNG)
 ```
 
-| # | 단계 | 산출물 | 하는 일 |
-|---|---|---|---|
-| 1 | `base` | `korean_en2ko_fixed/checkpoint_step_011000.pth` | 영어 pretrained → 한글. **Phase 1 생략** — `korean_from_en.py` 로 긴 줄(style 1~8 / gen 1~32)만 학습 (20k step, 채택 s11000) |
-| 2 | `htr` | `aux_htr_ko/htr_s20000` | 한글 HTR 리더 (VAE loss + 평가 리더) |
-| 3 | `vaedec` | `vae_korean_dec/vae_s15000` | VAE decoder-only 워밍업 |
-| 4 | `vaefull` | `vae_korean_full/vae_s15000` | VAE full + HTR 0.3 |
-| 5 | `vaemse` | `vae_korean_full_mse/vae_s28000` | VAE full **pure-L1** ← 릴리즈 VAE |
-| 6 | `readapt` | `eruku_readapt_fullvae/checkpoint_step_015000.pth` | 새 VAE latent 로 T5 재적응 (`--reset-vae`) |
-| 7 | `short` | `eruku_short_fullmse/checkpoint_step_030000.pth` | **단문강조 재적응 = best** |
+7단계 구성·각 단계 산출물·기대 CER 표·주의사항은 [`docs/REPRODUCE.md`](docs/REPRODUCE.md).
+근거 수치는 [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) §4·§5.
 
-`./eval.sh best` 가 대조할 기대 수치 (n=100, cfg=1.0, coherent):
-
-| | 전체 | 단문(1~3) | 중문(4~8) | 장문(9~15) |
-|---|---|---|---|---|
-| 한글 (기록 / **실측 재현**) | 0.127 / **0.121** | 0.286 / **0.269** | 0.049 / **0.047** | 0.059 / **0.060** |
-| 영어 (기록 / **실측 재현**) | 0.045 / **0.032** | — / 0.073 | — / 0.015 | — / 0.025 |
-
-실측 재현 = 2026-08-14 에 `./eval.sh best` 를 그대로 돌린 값. 생성은 run-to-run 재현이 안 되므로
-±0.01 수준 차이는 정상이고, 판정은 **n≥100 페어링**으로만 한다.
-
-> ℹ️ 1단계는 **`train/phase2.py` 가 아니다.** phase2 는 Phase 1 ckpt resume 전제(lr 1e-4)라 영어
-> pretrained 에서 바로 못 쓴다. 어절 범위·dropout·virtual batch 는 phase2 와 같고, 시작점(영어
-> pretrained)·lr(5e-5)·영어 15% 혼합·val 로깅만 다른 `korean_from_en.py` 를 쓴다.
->
-> ⚠️ 3·4단계는 **당시 실제로 거친 warm-start 체인**이라 남겨둔 것이고, 새로 만든다면
-> 5단계 레시피(full + pure-L1)를 원본 `emuru_vae` 에서 한 번에 돌리는 쪽이 낫다(§4).
-> 원본 run 들이 쓰던 `--val-fonts-dir assets/fonts_korean_unseen` 은 폴더가 정리돼 빠졌다 —
-> val_loss 절대값만 달라지고 생성·CER 결과에는 영향 없다.
-
-### 처음부터 학습 (best 재현이 아니라 새로 돌릴 때)
+### 새로 학습 (best 재현이 아니라 새로 돌릴 때)
 
 ```bash
 ./train.sh data --n 8 --out /tmp/ksplit   # (선택) 데이터 파이프라인 sanity check
@@ -121,78 +95,28 @@ DRY=1 ./train.sh best all               # 실행 않고 커맨드만 출력
 # 논문 2-phase: Phase 1(짧은 어절로 glyph) → Phase 2(긴 줄 일반화)
 GPU=0 ./train.sh phase1                   # → finetune_runs/korean_p1/
 GPU=0 ./train.sh phase2                   # korean_p1/checkpoint_last.pth 에서 resume, +5000 step
-GPU=0 ./train.sh phase1 --batch-size 16 --grad-accum 16 --max-steps 20000   # 인자 덮어쓰기
 
 # (권장 대안) 영어 pretrained → 바로 한글 긴 줄 — Phase 1 생략, 영어능력 보존
 GPU=0 ./train.sh en2ko                    # → finetune_runs/korean_en2ko/
+
+# VAE 한글 적응 (fidelity 하드상한 올리기) — htr 리더 → vae finetune → 교체평가 → T5 재적응
+GPU=0 ./train.sh htr && GPU=0 ./train.sh vae
 ```
 
-> 진입점 구조: 공통 로직은 `train/core.py`(전체 인자 `make_parser` + 학습 루프)에 있고,
-> 각 Phase 스크립트(`train/phase1.py`/`train/phase2.py`/`train/korean_from_en.py`)가
-> `set_defaults` 로 레시피를 덮어씌운 뒤 `train()` 을 호출한다. 개별 인자는 CLI 로 덮어쓰기 가능.
+왜 2-phase 인지, step·노출량·VRAM·lr 주의, VAE 적응 4단계와 `--train-part`/`--htr-weight` 등
+플래그 설명은 [`docs/TRAINING.md`](docs/TRAINING.md).
 
-왜 두 단계인가: 논문에서 **Phase 1 (65000 iter × 256 = 16.6M 샘플, 짧은 단어쌍)** 이
-byte→glyph 매핑을 만들고, **Phase 2 (5000 iter = 1.28M, 긴 줄)** 는 길이 일반화만 담당.
-한글 glyph 는 영어 pretrained 에 없는 **신규 능력**이라 Phase-1 형태(짧은 샘플 = 같은
-시간에 더 많은 glyph 감독)로 먼저 가르치는 것이 효율적. 단 from-scratch 는 불필요 —
-VAE-latent 디코딩·자기회귀·style 메커니즘은 영어 pretrained 에서 전이됨.
+### 학습 없이 쓰기 (발행본)
 
-- `--max-steps` / `--extra-steps` / `--save-every` / `--log-every` 는 **virtual step**(optimizer 업데이트) 기준.
-  Phase 2 는 `--extra-steps N` 으로 `max-steps = resume_step + N` 을 자동계산 → 누적값 실수 방지
-- 노출량(기본 레시피): Phase 1 65000 step × 256 = **16.6M 샘플**, Phase 2 5000 step × 256 = **1.28M**.
-  논문은 10M 고정 데이터셋을 재사용하지만 여기선 온라인 무한 생성이라 **모든 샘플 unique**
-  (resume 시에도 seed offset 으로 중복 방지). 노출량은 `--max-steps` 로 조절
-- VRAM: `train/korean_from_en.py`(batch 16 × accum 16, max-img-len 8192) 측정 **~35GB**.
-  Phase 1 batch 128 은 훨씬 큰 VRAM(멀티 GPU) 필요 — 단일 24GB 면 `--batch-size 16 --grad-accum 16`
-  으로 낮춰 virtual 256 을 유지
-- lr 은 **virtual batch 에 맞춰야** 함 (논문 lr 1e-4 = virtual 256 기준). virtual batch 를 줄이면 lr 도
-  낮출 것 (batch 2 + lr 5e-5 발산 확인). 빠른 sanity: `--grad-accum 1 --lr 1e-5`
-
-### 3-C. VAE 한글 적응 (fidelity 상한 올리기 — 근거는 [`docs/EXPERIMENTS.md`](docs/EXPERIMENTS.md) §3)
-
-동결 VAE 의 한글 재구성 한계가 fidelity 하드 상한이라, VAE 자체를 한글에 맞춘다.
+`finetune_runs/` 는 gitignore 라 새 클론엔 로컬 `.pth` 가 없다. 하지만 **`--ckpt` 는 로컬 경로와
+HF repo id 를 둘 다 받는다** — 파일이 없고 `owner/name` 꼴이면 발행본을 내려받아 그대로 쓴다
+(가중치가 로컬 best 와 동일하다, → [`docs/RELEASE.md`](docs/RELEASE.md)).
 
 ```bash
-# (1) 평가/loss 용 한글 HTR 리더 (easyocr 은 한글 GT 조차 CER 0.236 으로 saturated)
-./train.sh htr --out finetune_runs/aux_htr_ko
-
-# (2) VAE finetune — 권장 레시피: full(enc+dec) + HTR off(pure-L1)
-./train.sh vae --htr-checkpoint finetune_runs/aux_htr_ko/htr_s20000 \
-  --train-part full --htr-weight 0 --kl-weight 1e-6 \
-  --batch-size 8 --grad-accum 4 --lr 1e-4 --max-steps 30000 \
-  --out finetune_runs/vae_korean_full     # → vae_sXXXXX/ (diffusers AutoencoderKL 폴더)
-
-# (3) 교체 평가 (decoder-only 는 재학습 없이 바로)
-./eval.sh cer --ckpt <eruku ckpt> \
-  --vae-checkpoint finetune_runs/vae_korean_full/vae_s30000 --n 100 --coherent
-
-# (4) full 은 latent 가 이동하므로 Eruku 재적응 필수 (--reset-vae 로 ckpt 의 옛 vae.* strip)
-./train.sh en2ko \
-  --resume <한글 ckpt> --vae-checkpoint finetune_runs/vae_korean_full/vae_s30000 --reset-vae \
-  --out finetune_runs/eruku_readapt --extra-steps 15000
+./inference.sh hf                                # 발행본 공개 API 로 생성
+./inference.sh best                              # 로컬 ckpt 없으면 위로 자동 폴백 (eval.sh best 도)
+./eval.sh cer --ckpt HERIUN/eruku_korean         # 평가도 발행본으로
 ```
-
-- `--train-part dec|full` — `dec` = latent 불변(교체만으로 사용) / `full` = 상한↑ 대신 재적응 필요
-- `--htr-weight` — OCR 가독성 loss. **기본 0 권장**(켜면 한글 MSE·영어 모두 악화 — EXPERIMENTS.md §4)
-- `--pyramid-weight/--pyramid-levels/--pyramid-alphas` — Laplacian band-pass(고주파 우선 가중)
-  loss. 기본 0 = 끔. 재현용으로 남긴 실험 경로이며 pure-L1 대비 이득 없음(EXPERIMENTS.md §4)
-- `--logvar-weighting` — 원본 LDM 관례의 학습형 관측 노이즈 가중. 기본 off, 우리 세팅선 무익
-- `--val-font-frac` — 학습 폰트에서 val 폰트를 떼는 비율(폰트 일반화 측정). VRAM ~20GB(batch 8)
-
-### 무엇이 자동으로 받아지고, 무엇이 안 받아지나
-
-| 언제 | 무엇 | 크기 |
-|---|---|---|
-| 모델 생성 시 항상 | `google/byt5-small` 토크나이저 + `google-t5/t5-large` **config 만**(가중치 아님 — `T5ForConditionalGeneration(config)` 는 랜덤 초기화) | 작음 |
-| 모델 생성 시 항상 | `blowing-up-groundhogs/emuru_vae` VAE 가중치 | ~300MB |
-| 학습 시작 (`--resume` 없을 때) | 영어 pretrained `blowing-up-groundhogs/eruku` 의 `pytorch_model.bin` | ~2.9GB |
-| `./inference.sh hf` | 발행본 `HERIUN/eruku_korean` + 페어 VAE `HERIUN/emuru_vae_korean` | ~3.2GB |
-
-⚠️ **한글을 아는 T5 본체 가중치(`.pth`)는 자동으로 받지 않는다.** `infer/show.py`·`eval/*` 는
-`--ckpt` 로 로컬 파일을 읽고, `finetune_runs/` 는 gitignore 라 새 클론엔 없다. 그래서 새 환경에서는
-**`./inference.sh hf`(발행본 사용)** 로 돌리거나 `./train.sh best` 로 직접 만들어야 한다.
-`./inference.sh best` 는 로컬 ckpt 가 없으면 알아서 발행본 경로로 넘어간다.
-OrigamiNet OCR ckpt 는 불필요 (alpha=1.0 → OCR loss 미사용, 공식 HF 릴리즈에도 OCR 모듈 없음).
 
 ### 학습 산출물 (`--out` 디렉토리)
 
@@ -218,85 +142,40 @@ resume 시 이전 run 의 `train_config.yml` 과 인자가 다르면 `[config WA
 
 ## 학습 데이터 생성 (온라인 합성, 디스크 0)
 
-학습 데이터는 **디스크에 미리 저장하지 않고 매 step 새로 합성**한다 (`custom_datasets/korean_split.py`
-= 원본 repo `OnlineSplitFontSquare` 의 한글 서브클래스). 따라서 모든 샘플이 unique 이고
-사실상 무한 데이터셋. 한 샘플 = `(style_img, style_text, gen_img, gen_text)` 4-tuple.
+디스크에 미리 저장하지 않고 **매 step 새로 합성**한다 (`custom_datasets/korean/split.py`
+= 원본 `OnlineSplitFontSquare` 의 한글 서브클래스). 모든 샘플이 unique 인 사실상 무한 데이터셋이고,
+한 샘플 = `(style_img, style_text, gen_img, gen_text)` 4-tuple. **폰트 1종 = writer 1명**으로 두어
+(style, target) 쌍을 사람 라벨링 없이 무한 생성하는 것이 핵심이다.
 
-### (1) 폰트 = writer
-- **한글 손글씨/디스플레이 폰트 83종** (`assets/fonts_korean_v2/train/` 의 .ttf).
-  Eruku 의 "writer(필체)" 개념을 폰트 1종 = writer 1명으로 매핑.
-  (초기 손글씨 폰트 + Google Fonts 한글(`tools_fetch_gf_korean.py` 수집)을 병합해 현재 83종)
-- 렌더가 깨지는 폰트 3종(NMFClassic, GangwonEduSaeeum, KCCPakKyongni)은 제거됨.
-- `fonts_charsets.json` 에 각 폰트의 charset 을 캐시 → 폰트가 못 그리는 글자(두부 □)를
-  애초에 샘플하지 않아 tofu 방지.
-- **held-out 테스트 폰트 16종** (`assets/fonts_korean_v2/test/`): 학습에 안 쓴 폰트.
-  최종 일반화 평가 전용. 학습 중 val 은 기본적으로 train 폰트에서 `--val-font-frac`(기본 0.1)
-  비율만큼 결정적으로 분할해 **학습에서 제외**하고 사용 → 본 적 없는 폰트로 val loss 측정.
-  (`--val-fonts-dir` 로 특정 디렉토리를 val 로 지정할 수도 있음)
-- **영어 폰트 177종** (`assets/fonts_english/`, `--english-fonts-dir` 기본값):
-  `--english-frac > 0` 일 때 라틴 폰트 데이터를 섞어 영어 스타일 다양성 보강 (`tools_fetch_gf_english.py` 로 수집).
+- **폰트**: 한글 손글씨/디스플레이 **83종**(`assets/fonts_korean_v2/train/`) + 영어 177종,
+  held-out 테스트 16종. 폰트별 charset 캐시로 못 그리는 글자를 애초에 안 뽑아 tofu 방지
+- **텍스트**: `MixedLineSampler` 가 한글 0.45 / 영어 0.20 / 숫자 0.20 / **랜덤음절 0.15**(= 논문
+  "random words", 코퍼스 빈도편향 없이 전 음절 노출) 를 섞고 구두점·특수기호를 붙여 1줄 합성
+- **원본 대비**: style/gen 을 **따로 렌더**(경계 침범 제거), **RandomWarping 제거 · RandomInvert
+  비활성**, RandomRotation 은 **style 에만**, gen 배경 **흰색 강제** — 출력이 흰배경·곧은 글자인 이유
 
-### (2) 텍스트 = MixedLineSampler 로 합성한 가짜 라인
-style 텍스트와 gen(target) 텍스트를 **각각 독립적으로**, 아래 비중으로 토큰을 섞어 1줄 생성
-(`custom_datasets/korean_split.py:65`, 원본 논문의 "English + random words" 를 한글로 확장):
+```bash
+uv run python custom_datasets/korean/split.py --n 8 --out /tmp/ksplit   # 샘플 8쌍 + montage
+```
 
-| 토큰 종류 | 비중 | 출처 |
-|---|---|---|
-| 한글 단어 | **0.45** | `assets/corpus/korean_lines.txt` (한 줄당 한 문장, 1.7MB) 에서 어절 추출 |
-| 영어 단어 | **0.20** | `assets/corpus/english_words.txt` (466,511 단어) |
-| 숫자 | **0.20** | 날짜/시각/금액/전화번호 등 패턴 생성 |
-| 랜덤음절 | **0.15** | KS X 1001 **2,350 음절**(전 폰트 교집합)에서 균등추첨한 1~4글자 가짜 단어 |
-| + 구두점 0.35 / 특수기호 0.08 확률로 토큰에 부착 | | |
-
-- **랜덤음절(rand)** = 논문 "random words" 대응. 코퍼스 빈도 편향 없이 전 음절을 단어
-  맥락에서 노출시켜 희귀 글자까지 학습 (2,000라인 샘플 시 2,347/2,350 음절 등장 확인).
-- 어절 수 범위는 Phase 별로 다름: **Phase 1 = style 2~3 / gen 2~3**,
-  **Phase 2 = style 1~8 / gen 1~32** (긴 줄). `--style-words` / `--gen-words` 로 조절.
-
-### (3) 렌더 → 증강 → split
-1. style/gen 두 텍스트를 **같은 폰트**로 각각 이미지 렌더 (높이 64px).
-2. 증강 적용 (`custom_datasets/font_square/font_square_split.py:180-189`):
-   `RandomRotation(±3°, p=0.5)`, **`RandomWarping`(TPS 비선형 휨, p=1.0 항상)**,
-   `GaussianBlur(p=0.5)`, `GrayscaleDilation(p=0.1)`, `ColorJitter(p=0.5)`,
-   종이배경 합성, ink jitter. → 실제 손글씨의 왜곡에 robust 하게 학습.
-   (생성 결과가 휘어 보이는 건 이 warp 를 모델이 학습·재현한 정상 동작)
-3. 폭 기준으로 잘라 `style_img`(조건) / `gen_img`(target) 로 분리.
-- 데이터 sanity check: `uv run python custom_datasets/korean_split.py --n 8 --out /tmp/ksplit`
-  → 8개 style/gen pair + montage 저장.
-
-### 원본 repo(`OnlineSplitFontSquare` + `TextSampler`) 대비 변경점
-
-한글판은 원본 온라인 합성 파이프라인을 **서브클래스**(`KoreanSplitFontSquare`)로 재사용하되,
-아래 4가지를 바꿨다. 근거는 각 항목의 코드 위치 참조.
-
-| 구분 | 원본 repo | 한글판 (변경) | 이유 |
-|---|---|---|---|
-| **텍스트 소스** | `TextSampler`: 영어 단어만(nltk 6개 코퍼스 103,411단어), uni/bigram 빈도 가중 1종 sampler로 style·gen 동일 추첨 | `MixedLineSampler`: 한글0.45/영어0.20/숫자0.20/랜덤음절0.15 혼합 + 구두점·특수기호 부착. **폰트 charset 인지**(못 그리는 글자 미추첨 → tofu 방지) | 한글+숫자+기호 혼합 라인이 목표. 빈도편향 없이 전 음절 노출(랜덤음절) |
-| **style/gen sampler** | 단일 sampler → style·gen 어절수 범위 동일 | style/gen **독립 sampler**(범위 분리 가능: Phase1 2~3/2~3, Phase2 1~8/1~32) | 조건(style)과 타겟(gen) 길이를 따로 통제 |
-| **렌더 방식** | `[style\|gap\|gen]`을 **한 이미지로 합쳐 렌더** → 증강 → 고정 컬럼비로 분할 | style/gen을 **각각 따로 렌더**(경계 없음) | 원본은 회전·warp가 경계를 밀어 style↔gen 침범(잘림/잔상). 분리로 제거 (`custom_datasets/korean_split.py:80-123`) |
-| **증강 정책** | 합친 이미지에 일괄: RandomRotation·**RandomWarping(TPS 휨)**·Blur·배경·Dilation·ColorJitter(bright=0.05)·**RandomInvert(p=0.2)** | **RandomWarping 완전 제거**, **RandomInvert 비활성**, RandomRotation은 **style만**(gen 곧게), 배경은 **gen 흰색 강제**(style만 종이배경), ColorJitter **brightness=0**. Blur·Dilation·AlphaChannel(잉크)·Jitter는 **RNG 스냅샷으로 style·gen 동일 실현**(같은 writer 질감 매칭) | 모델 `generate()`가 흰배경·곧은 글자를 출력 → 타겟을 그렇게 학습해야 휨/배경이 전파 안 됨. style은 추론 시 실제 필기라 현실 증강 유지 |
-
-- **폰트(writer)**: 원본 font_square 영어 폰트 → **한글 손글씨/디스플레이 폰트 83종**(`assets/fonts_korean_v2/train/`).
-- `--legacy-transform` 플래그로 원본 composite(합쳐 렌더+일괄증강+경계분할) 방식을 그대로 재현 가능(전/후 비교 실험용).
-- 원본 대비 **동일하게 유지**한 것: 온라인 무한 생성(디스크 0), 높이 64px, VAE-latent split 구조, `p_uncond` 텍스트 dropout 메커니즘.
-
-### 논문 레시피 매핑
-- `--text-dropout 0.05` = p_uncond (style+gen 텍스트 모두 drop → CFG 학습)
-- `--style-text-dropout 0.10` = p_drop (Phase 2 전용, style 텍스트만 drop)
-- Phase 1: `--style-words 2 3 --gen-words 2 3` / Phase 2: `--style-words 1 8 --gen-words 1 32`
-- virtual batch 256: `--grad-accum` × `--batch-size` = 256 (논문 lr 1e-4 는 이 기준)
-- 논문 iteration: Phase 1 = 65000 (16.6M 샘플), Phase 2 = 5000 (1.28M 샘플)
-- target 패딩 = visual `<EOG>`: 이미 구현되어 있음 — specials 패딩값 1(=EOG) +
-  forward 에서 EOG embedding 치환 + CE 로 "gen 종료 후엔 EOG 만" 학습
+폰트 목록·샘플러 비중·증강 정책 전체·논문 레시피 매핑(`p_uncond`/`p_drop`/virtual batch 256)은
+[`docs/DATA_GENERATION.md`](docs/DATA_GENERATION.md) §8.
 
 ### 📄 파이프라인 상세 문서 & 알려진 이슈 (`docs/`)
 - **`docs/EXPERIMENTS.md`** — 📊 **측정 로그 전문**(§1~§7): 초기 실험 → echo 정량 → VAE 한글
   수용성 → VAE 적응 ablation → Eruku 재적응 → 강건성 → 종성 획 손실. 아래 「결과 요약」의 근거.
-- **`docs/MODULE_IO.md`** — 🧩 **학습 모듈 I/O 총정리**: 배치 dict 6개 키(무엇을 넣어야 하나),
+- **`docs/MODULE_IO.md`** — 🧩 **학습 모듈 I/O 총정리**(위 「한 장 요약」 그림의 상세판): 배치 dict 6개 키(무엇을 넣어야 하나),
   `style_len`/`gen_len` 이 왜 이미지에서 못 얻는 값인지, 텍스트가 T5 encoder 로 들어가는 경로,
   `forward`(loss+pred_latent) / `generate`(라인 이미지) 출력까지 **실제 생성 이미지**로 설명.
   - 재현: `CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. .venv/bin/python docs/_gen_module_io.py`
-- **`docs/DATA_GENERATION.md`** — 원본 `OnlineSplitFontSquare` 데이터 생성 전체 흐름(코드 단위).
+- **`docs/DATA_GENERATION.md`** — 데이터 생성 전체 흐름(코드 단위). §1~§7 원본 `OnlineSplitFontSquare`,
+  **§8 한글판**(폰트 83종·`MixedLineSampler` 비중·증강 정책 변경·논문 레시피 매핑).
+- **`docs/RELEASE.md`** — HF 릴리즈 발행 절차·검증. ⚠️ **릴리즈 클래스와 학습 클래스의 style
+  prefix 크롭 규약이 다르다**(섞어 쓰면 이중 크롭으로 생성물이 날아감) + 2026-08 echo 패치 CER 실측.
+- **`docs/REPRODUCE.md`** — 🎯 **best 모델 재현 7단계**: 각 단계 산출물, `./eval.sh best` 가
+  대조할 기대 CER 표, 3·4단계를 건너뛰어도 되는 이유.
+- **`docs/TRAINING.md`** — 🏋 **새로 학습할 때의 레시피**: 2-phase 근거, virtual step·노출량·
+  VRAM·lr 주의, VAE 한글 적응 4단계와 플래그(`--train-part`/`--htr-weight`/`--pyramid-*`).
 - **`docs/PIPELINE_STEP_BY_STEP.md`** — 렌더→증강→split 을 단계별 이미지로 시각화.
   긴 텍스트에서 ①회전(`expand=False`)이 양끝을 잘라내고 ②warp 가 split cut 을 글자로 밀어넣는
   문제를 실측·정리(파이프라인은 **2~3어절 짧은 라인 가정** 위에서만 안전).
@@ -426,57 +305,30 @@ train/korean_from_en.py    # 영어 pretrained → 한글 직접 (Phase 1 생략
 train/eruku_continous.py   # (원본 repo 스타일 트레이너: wandb/accelerate/webdataset 기반, 참고용)
 train/vae_korean.py        # VAE 한글 적응 finetune (--train-part dec|full, htr/pyramid/logvar 항)
 train/aux_htr.py           # 한글 HTR 리더 finetune (VAE 의 HTR loss + 평가 리더 겸용)
-custom_datasets/korean_aux.py      # HTR 학습용 (라인이미지, 전사) 데이터셋
-custom_datasets/korean_alphabet.py  # HTR alphabet (assets/korean_charset.json 기반)
-tools/fetch_aux.py         # HTR 학습용 aux 데이터 수집
-# 데이터
-custom_datasets/korean_split.py    # 온라인 한글 split 데이터셋 (+ CLI 샘플 덤프, --show-model-input)
-custom_datasets/korean_fontset.py      # 오프라인 라인 생성기 + MixedLineSampler/build_pools (공용)
-assets/download_script/tools_fetch_gf.py  # Google Fonts 수집기 (--lang ko|en, 한/영 통합)
-assets/font_view/render_overview.py       # 폰트 오버뷰 montage (샘플 렌더 + 글자수 분류)
-tools/font_audit.py        # 폰트 품질 감사: 미지원(두부)·malformed 글리프 스캔 (코퍼스 기준)
+# 데이터  (상세: docs/DATA_GENERATION.md §8)
+custom_datasets/korean/split.py    # 온라인 한글 split 데이터셋 (+ CLI 샘플 덤프, --show-model-input)
+custom_datasets/korean/fontset.py  # 오프라인 라인 생성기 + MixedLineSampler/build_pools (공용)
+custom_datasets/korean/aux.py     # HTR 학습용 (라인이미지, 전사) 데이터셋 + alphabet.py
+custom_datasets/upstream/font_square/       # 원본 repo 데이터 코드 (렌더/증강, tps)
+custom_datasets/hw_line_sample/    # 실제 손글씨 라인 20장 + label.txt (미러링/복원 평가용)
+tools/                     # font_audit(폰트 품질 감사) · fetch_aux · hf_upload(HF 릴리즈)
 # 추론 / 평가  (infer/show.py 가 공유 라이브러리: load_model/gen_arr/render_in_font …)
 infer/release.py           # 발행된 HF 릴리즈(공개 API)로 생성 — 로컬 ckpt 불필요
 infer/show.py              # 자기설명적 결과 뷰어 [스타일ref|정답|생성 cfg…] (--exclude-writers 로 폰트 제외)
-infer/matrix.py            # 스타일×텍스트 매트릭스 뷰어 (1 style → 여러 gen_text)
-infer/echo_compare.py      # echo(style==gen) 모델 나란히 비교 뷰어
-eval/echo_metrics.py       # echo 정량 (MSE/SSIM/LPIPS/FID)
-eval/cer.py                # echo CER (easyocr 기반 — 한글은 saturated, 교차검증용)
+infer/matrix.py            # 스타일×텍스트 매트릭스 뷰어 / echo_compare.py  모델 나란히 비교
 eval/htr_cer.py            # 생성 CER (한글 HTR 리더, 렌더바닥 ~0.00) ← 한글 주 지표
-eval/all.py                # 통합 평가 배터리 (eval/cer.py + eval/echo_metrics.py 오케스트레이션)
-tools/hf_upload.py         # HF 릴리즈 (ckpt→릴리즈 클래스 변환 + VAE/모델 repo 업로드)
-# 일회성 실험/검증 스크립트 (결론은 docs/EXPERIMENTS.md 에 기록됨. experiments/common.py 가
-# 저장소 루트를 sys.path 에 넣어주므로 어느 cwd 에서든 `python experiments/xxx.py` 로 실행)
-experiments/vae_recon.py         # VAE roundtrip 복원 비교 (고정 probe: ko/en/극단폰트)
-experiments/vae_hw_recon.py      # 실제 손글씨 복원 비교 (일반화)
-experiments/vae_compare.py       # VAE 여러 개 나란히 비교
-experiments/vae_height_sweep.py  # 입력 height 스윕 — h>64 이득을 self/native 두 기준으로 측정
-experiments/vae_norm_check.py    # [-1,1] vs [0,1] 정규화 검증 (복원 + Eruku 생성까지)
-experiments/vae_prep_sweep.py    # 입력 전처리 스윕 (self MSE/SSIM + HTR CER damage)
-experiments/vae_prep_minrec.py   # 최소 vs 권장 전처리 — 공통 캔버스 기준 비교
-experiments/gen_compare.py       # Eruku 생성 전/후 montage (같은 VAE → 순수 T5 개선분)
-experiments/gen_heldout.py       # held-out 폰트(custom_hw_fonts) 생성 montage
-experiments/mirror_compare.py    # 실제 손글씨 style 미러링 + ink bbox 크롭 검증
-experiments/jong_stroke_loss.py  # 종성(받침) 획 손실 — VAE roundtrip 을 음절 창 단위로 픽셀 정밀 측정
-experiments/jong_gen_loss.py     # 종성 획 손실 — 생성물을 HTR 로 읽어 자모 단위(삭제/오치환) 측정
-experiments/jong_hypotheses.py   # 위 두 덤프 재분석 — 획 수(H1)/학습 빈도(H2) 가설 검증(GPU 불필요)
-experiments/style_echo_check.py  # style_text 채웠을 때 생성물 앞머리에 style 잔재가 남는지 (리더 기준)
-# 모델 / 원본 코드
-models/eruku.py    # Emuru 모델 (forward/generate) — style-len 단위버그 수정됨
-custom_datasets/           # 원본 repo 데이터 코드 (font_square 렌더/증강, tps)
-models/                    # OrigamiNet 등
-docs/                      # 파이프라인 상세/버그 분석 문서 + 재현 스크립트·이미지
-assets/
-  fonts_korean_v2/train/   # 한글 손글씨/디스플레이 폰트 83개 + fonts_charsets.json
-  fonts_korean_v2/test/    # held-out 테스트 폰트 16개 (최종 일반화 평가 전용)
-  fonts_english/           # 영어(라틴) 폰트 177개 (--english-fonts-dir 기본값)
-  fonts_label/             # NanumGothic (뷰어 라벨용)
-  backgrounds/             # 종이 배경
-  corpus/                  # korean_lines.txt(한 줄당 한 문장) / chars.txt / english_words.txt
-  font_view/               # 폰트 오버뷰 스크립트 + 폴더별 overview_*.png
-  custom_hw_fonts/         # AI 손글씨 폰트 4종 — 학습 미사용, held-out 평가 전용
-  korean_charset.json      # HTR alphabet 문자 집합(2509자)
-custom_datasets/hw_line_sample/  # 실제 손글씨 라인 20장 + label.txt (미러링/복원 평가용)
+eval/cer.py                # echo CER (easyocr — 한글은 saturated, 교차검증용)
+eval/echo_metrics.py       # echo 정량 (MSE/SSIM/LPIPS/FID) / all.py  통합 배터리
+# 모델
+models/eruku.py            # Emuru 모델 (forward/generate) — style-len 단위버그 수정됨
+models/                    # + OrigamiNet, VAE, HTR
+# 그 외
+experiments/               # 일회성 실험 스크립트 (vae_* / gen_* / jong_* / style_echo_check …)
+                           #   결론은 전부 docs/EXPERIMENTS.md 에 기록됨. 어느 cwd 에서든 실행 가능
+docs/                      # 상세 문서 + 재현 스크립트·이미지
+assets/                    # fonts_korean_v2(train 83 / test 16) · fonts_english(177) ·
+                           #   custom_hw_fonts(held-out 4) · backgrounds · corpus · korean_charset.json
+                           #   + download_script/(Google Fonts 수집) · font_view/(폰트 오버뷰)
 ```
 
 ### 폰트 오버뷰 (어떤 글씨체인지 한눈에 보기)
@@ -511,78 +363,16 @@ val_mse 는 s20000 이 더 낮지만 생성 CER 은 s30000 이 낫다 — **ckpt
 > 실행 환경 주의: 이 repo 는 **`.venv/bin/python`** 으로 실행한다(torch 2.9+cu128,
 > diffusers/skimage/transformers 포함). 시스템 `python`(miniconda base)에는 numpy 조차 없다.
 
-## HuggingFace 릴리즈 (2026-07)
+## HuggingFace 릴리즈
 
-최고 조합을 **repo 2개**로 발행한다. 업로드/변환은 `tools/hf_upload.py` 로 재현한다.
+✅ **2026-08-14 발행 완료.** 최고 조합을 **repo 2개**로 발행한다 — VAE 가중치를 상위 repo 가
+`AutoencoderKL.from_pretrained(config.vae_name_or_path)` 로 **원격 로드**하므로 분리가 필수다.
 
-| repo | 내용 | 왜 분리하나 |
-|---|---|---|
-| [`HERIUN/eruku_korean`](https://huggingface.co/HERIUN/eruku_korean) | T5 + proj + 특수토큰 (`model.safetensors`) + remote code(`modeling_eruku.py`) | 상위 진입점 |
-| [`HERIUN/emuru_vae_korean`](https://huggingface.co/HERIUN/emuru_vae_korean) | 한글 적응 VAE (diffusers `AutoencoderKL`) | `modeling_eruku.py` 가 `AutoencoderKL.from_pretrained(config.vae_name_or_path)` 로 **VAE 가중치를 그 repo 에서 실제로 내려받기** 때문 |
-
-**T5 는 별도 업로드가 필요 없다** — `T5Config.from_pretrained(config.t5_name_or_path)` 로 구조만
-받고 가중치는 상위 repo 의 weight 파일에서 전부 덮인다. 반면 VAE 는 가중치를 원격에서 가져오므로,
-`full` 로 학습해 latent 가 이동한 우리 VAE 를 **config 가 가리키게** 해야 조합이 맞는다
-(원본 `blowing-up-groundhogs/emuru_vae` 를 가리킨 채 T5 만 갈면 생성이 무너진다).
-
-```bash
-# 0) 카드용 before/after figure (영문 라벨, /tmp/relfig 에 4장)
-#    - VAE 복원: 원본 emuru_vae vs 릴리즈 VAE (한글/영어)
-for L in ko en; do CUDA_VISIBLE_DEVICES=0 .venv/bin/python experiments/vae_recon.py --lang $L --label-lang en \
-  --models "original=blowing-up-groundhogs/emuru_vae" "ours=finetune_runs/vae_korean_full_mse/vae_s28000" \
-  --out /tmp/relfig/recon_$L.png; done
-#    - 생성: 원본 영어 pretrained(원본 VAE) vs 릴리즈(한글 VAE + 재적응 T5)
-PRE=$(ls ~/.cache/huggingface/hub/models--blowing-up-groundhogs--eruku/snapshots/*/pytorch_model.bin | head -1)
-CUDA_VISIBLE_DEVICES=0 .venv/bin/python experiments/gen_compare.py --ckpt-before "$PRE" \
-  --ckpt-after finetune_runs/eruku_short_fullmse/checkpoint_step_030000.pth \
-  --label-before "BEFORE: original pretrained (English, original VAE)" \
-  --label-after "AFTER: this release (Korean VAE + re-adapted T5)" \
-  --col-labels "style reference (input)" "target (rendered in that font)" \
-  --row-label-fmt "style: {font}" "target: {text}" \
-  --cats ko_release en_release --n-rows 4 --out-dir /tmp/relfig
-
-# 1) VAE 먼저 (상위 repo 로드가 이걸 요구).  --figures-dir 주면 samples/ 로 올리고 카드에 삽입
-.venv/bin/python tools/hf_upload.py vae --figures-dir /tmp/relfig --push
-# 2) 상위 모델: 변환 → 키 정합성 assert(missing/unexpected 0) → 생성 parity → 업로드
-CUDA_VISIBLE_DEVICES=0 .venv/bin/python tools/hf_upload.py model --verify-cer   # dry-run
-.venv/bin/python tools/hf_upload.py model --figures-dir /tmp/relfig --push
-```
-
-- 변환 시 로컬 학습 클래스에만 있는 `t5_to_ocr.*`(alpha=1.0 이라 미사용) 1키를 strip 하고,
-  `vae.*` 252키는 그대로 남긴다(config 의 VAE repo 와 동일 가중치 = 이중 안전판)
-- `save_pretrained` 가 `auto_map` 의 `AutoConfig` 항목을 떨어뜨려 `trust_remote_code` 로드가
-  깨지는 문제 → 원본 값으로 보완한다
-- ⚠️ **릴리즈 클래스와 학습 클래스는 style prefix 규약이 다르다.** 릴리즈
-  `get_model_inputs` 는 style latent 뒤에 SOG placeholder 열(ones) 1개를 붙이고,
-  `generate` 가 반환 전에 style prefix 를 **내부에서 잘라낸다**. 로컬은 안 붙이고 안 자르며
-  `infer.show.gen_arr` 가 special 시퀀스의 첫 SOG 로 자른다. 둘을 섞어(릴리즈 출력에 gen_arr
-  크롭을 겹쳐) 쓰면 이중 크롭으로 생성물이 날아간다 — 릴리즈 경로는 `generate_handwriting`
-  하나로만 쓸 것. 검증은 `--verify-cer`(공개 API 그대로 CER 측정)로 한다
-- ⚠️ **(2026-08 수정) 그 내부 크롭이 `style폭+1` 고정 오프셋이라 style echo 가 남았다.**
-  `style_text` 를 주면 모델이 SOG 를 낼 때까지 style 을 이어 그리는데(위 「`style_text`」 경고),
-  고정 오프셋은 그 사이 열들을 못 자른다 → 생성물 앞에 gen_text 에 없는 글자가 붙는다.
-  `tools.hf_upload.patch_modeling` 이 이 줄을 **special 시퀀스의 첫 SOG 기준**으로 바꾼다(로컬과 동일 규약).
-  릴리즈 경로 CER 실측(n=100, 같은 텍스트·폰트로 페어링, cfg=1.0):
-
-  | 구간 | 패치 전 | 패치 후 |
-  |---|---|---|
-  | 전체 | 0.494 | **0.163** |
-  | 단문(1~3) | 1.253 | **0.391** |
-  | 중문(4~8) | 0.159 | **0.049** |
-  | 장문(9+) | 0.098 | **0.066** |
-
-  표본별 66승/29무/5패이고, 진 5개는 전부 echo 가 없던(폭 차이 ≤40px) 표본이라 패치가 아니라 실행 편차다.
-  `style_text=""` 경로는 크롭 인덱스가 완전히 동일 → 회귀 없음.
-  ✅ **2026-08-14 발행 완료** ([commit `0e3ce43`](https://huggingface.co/HERIUN/eruku_korean/commit/0e3ce430fde7372f71639fce8369846666c1d167)).
-  발행 전 검증: 키 정합성 missing/unexpected 0, 공개 API 실측 CER 0.052(n=24, GT바닥 0.003),
-  bbox 크롭 smoke test 통과. 발행 후 `./inference.sh hf` 재실행으로 echo 소멸을 눈으로 확인했다
-  (패치 전에는 생성물이 style 잔재 `산이:`·`권한:` 로 시작했다).
-- ⚠️ **생성은 run-to-run 재현이 안 된다.** 같은 모델·같은 입력 2회에 픽셀 maxdiff 221, `--verify-cer`
-  (n=24) 3회에 CER 0.035 / 0.031 / 0.074. 비결정적 GPU 커널이 argmax 를 뒤집으면 그 뒤 생성이 통째로
-  갈라지기 때문. **n=24 는 게이트용이지 보고용 수치가 아니다** — 비교는 n≥100 페어링으로 할 것
-- 업로드하는 `modeling_eruku.py` 에는 **ink bbox 크롭**(`generate_handwriting(bbox_crop=True)`)을
-  추가했다. 실제 스캔 손글씨의 여백이 latent std 를 폰트의 6~29배로 튀겨 runaway/blank 를
-  만드는 문제(→ [`docs/VAE_ROBUSTNESS.md`](docs/VAE_ROBUSTNESS.md) ②)의 추론측 해결책
+| repo | 내용 |
+|---|---|
+| [`HERIUN/eruku_korean`](https://huggingface.co/HERIUN/eruku_korean) | T5 + proj + 특수토큰 (`model.safetensors`) + remote code(`modeling_eruku.py`) |
+| [`HERIUN/emuru_vae_korean`](https://huggingface.co/HERIUN/emuru_vae_korean) | 한글 적응 VAE (diffusers `AutoencoderKL`) |
+| [`HERIUN/eruku_korean_demo`](https://huggingface.co/spaces/HERIUN/eruku_korean_demo) | 🤗 Space — 브라우저에서 바로 써보는 gradio 데모 |
 
 ```python
 from transformers import AutoModel
@@ -593,9 +383,15 @@ img = m.generate_handwriting(style_image=Image.open("style_line.png"),
                              gen_text="한국어 손글씨 생성", cfg_scale=1.5)
 ```
 
+`bbox_crop=True` 는 스캔 손글씨의 여백이 latent 를 OOD 로 밀어내는 문제의 추론측 해결책이다
+(→ [`docs/VAE_ROBUSTNESS.md`](docs/VAE_ROBUSTNESS.md) ②). ⚠️ **릴리즈 경로는
+`generate_handwriting` 하나로만 쓸 것** — 로컬 `infer.show.gen_arr` 크롭을 겹치면 이중 크롭으로
+생성물이 날아간다. 발행 절차(`tools/hf_upload.py`)·검증 수치·규약 차이 전체는
+[`docs/RELEASE.md`](docs/RELEASE.md).
+
 ## 요구 사양
 
 - CUDA GPU ≥ 24 GB (batch 2, max-img-len 2048 기준; T5-large 705M trainable).
   VAE 적응(`train/vae_korean.py` batch 8 × accum 4)은 ~20 GB, 한글 HTR(`train/aux_htr.py`)은 ~10 GB
 - 디스크: repo ~250 MB + pretrained 2.9 GB(자동 다운로드) + 학습 ckpt 개당 ~8 GB
-- TPS C++ 백엔드는 선택 (`custom_datasets/font_square/tps/build.sh`, `uv sync --extra tps` 후) — 없으면 NumPy fallback 으로 동작
+- TPS C++ 백엔드는 선택 (`custom_datasets/upstream/font_square/tps/build.sh`, `uv sync --extra tps` 후) — 없으면 NumPy fallback 으로 동작

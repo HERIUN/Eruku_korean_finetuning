@@ -2,7 +2,7 @@
 
 [`DATA_GENERATION.md`](DATA_GENERATION.md) 는 파이프라인이 **어떻게 동작하는가**를 적는다.
 이 문서는 그 파이프라인을 코드로 되짚으며 발견한 **문제·미기록 동작·향후 개선 후보**를 적는다.
-전부 현행 코드(`custom_datasets/korean_split.py`, `custom_datasets/korean_fontset.py`) 기준이며,
+전부 현행 코드(`custom_datasets/korean/split.py`, `custom_datasets/korean/fontset.py`) 기준이며,
 수치는 실제 run(`finetune_runs/eruku_short_fullmse`, seed 15042, style 1~8 / gen 1~12)에서 재현·측정했다.
 
 | # | 문제 | 영향 | 수정 난이도 | 상태 |
@@ -23,15 +23,15 @@
 ## D1. 학습에 등장하는 한글 음절이 2,350자뿐이다
 
 **현상.** `rand` 토큰의 음절 풀을 **83개 학습 폰트 charset 의 교집합**으로 잡는다
-(`korean_split.py:131-138`).
+(`korean/split.py:131-138`).
 
 ```python
 cs = json.load(open(ASSETS / "fonts_korean_v2/train/fonts_charsets.json"))
-cps, inter = set(), None
+inter = None
 for s in cs.values():
     f = {ord(c) for c in s}
-    cps  |= f                                    # 합집합 54,887 → _covered() 검사용
     inter = f if inter is None else inter & f    # 교집합 2,441
+cps = inter                                      # _covered() 검사도 교집합 (D8 수정 후)
 syls = sorted(chr(c) for c in inter if 0xAC00 <= c <= 0xD7A3)   # → 2,350
 ```
 
@@ -52,9 +52,9 @@ ko 풀(코퍼스 어절)이 커버하는 음절도 2,345자로 rand 풀의 부�
 의 "희귀 겹받침이 사실상 학습되지 않았다"는 관찰과 같은 뿌리다.
 
 **개선안.** 교집합 대신 **폰트별 charset 으로 샘플링**한다. `__getitem__` 은 텍스트를 뽑기 전에
-이미 `font_id` 를 알고 있으므로(`korean_split.py:80-81`) 구조적으로 가능하고, 필요한 헬퍼
-`font_covered_words()` 도 이미 `korean_fontset.py:81` 에 있다 — **오프라인 생성기
-(`korean_fontset.py:304-305`)는 실제로 이 방식을 쓰고 온라인 split 경로만 안 쓴다.**
+이미 `font_id` 를 알고 있으므로(`korean/split.py:80-81`) 구조적으로 가능하고, 필요한 헬퍼
+`font_covered_words()` 도 이미 `korean/fontset.py:81` 에 있다 — **오프라인 생성기
+(`korean/fontset.py:304-305`)는 실제로 이 방식을 쓰고 온라인 split 경로만 안 쓴다.**
 샘플러가 폰트별 풀을 받도록 시그니처를 바꾸면 되고, 폰트 83종 × 풀 캐싱 비용만 든다.
 개입 후에는 음절 커버리지와 함께 **한글 CER 전체/단문/장문**을 재서 퇴보가 없는지 확인해야 한다.
 
@@ -70,7 +70,7 @@ print(len({c for c in inter if 0xAC00 <= c <= 0xD7A3}))   # 2350
 
 ## D2. `chars.txt` 가 ko 풀에 낱글자로 섞여 들어간다
 
-**현상.** `build_pools`(`korean_fontset.py:62-64`)가 `chars.txt` 의 음절을 **ko 풀에 1글자
+**현상.** `build_pools`(`korean/fontset.py:62-64`)가 `chars.txt` 의 음절을 **ko 풀에 1글자
 "단어"로 추가**한다. 별도 카테고리가 아니다.
 
 ```
@@ -101,7 +101,7 @@ if len(txt) > self.max_chars:
     txt = txt[: self.max_chars].rstrip()
 ```
 
-`max_chars` 는 CLI 노브가 없고 `korean_split.py:140-143` 에 **style 40 / gen 130** 으로 하드코딩돼 있다.
+`max_chars` 는 CLI 노브가 없고 `korean/split.py:140-143` 에 **style 40 / gen 130** 으로 하드코딩돼 있다.
 
 | | 평균 글자수 | 평균 어절수 | `max_chars` 도달(=절단) |
 |---|---|---|---|
@@ -123,7 +123,7 @@ if len(txt) > self.max_chars:
 
 **현상.** `english_words.txt` (dwyl/english-words `words.txt`, 466,551 항목)에서
 `^[A-Za-z]{2,12}$` 로 359,671 개를 남기고 **균등 무작위 8,000 개**만 뽑아 고정 어휘로 쓴다
-(`korean_fontset.py:68-73`, `n_english=8000`).
+(`korean/fontset.py:68-73`, `n_english=8000`).
 
 원본 사전이 희귀어·고어·학술어 위주라 균등추첨의 결과는:
 
@@ -198,7 +198,7 @@ D1 을 폰트별 샘플링으로 고치면 자연히 해소된다.
 ## D8. `_covered` 가 합집합으로 검사해 구두점이 렌더에서 조용히 삭제된다
 
 **현상.** 샘플러의 `_covered()` 검사와 `trail`/`wraps`/`specials` 필터는 **83개 폰트 charset 의
-합집합**(`cps`, 54,887자)을 쓴다(`korean_split.py:133`, `korean_fontset.py:115-119`).
+합집합**(`cps`, 54,887자)을 쓴다(`korean/split.py:133`, `korean/fontset.py:115-119`).
 "어떤 폰트든 하나라도 그릴 수 있으면 통과"이므로, 정작 배정된 폰트가 못 그리는 글자가 그대로 남는다.
 그 글자는 렌더 직전에 **경고 없이 삭제**된다(`render_font.py:74-76`).
 
@@ -239,7 +239,7 @@ ko 풀의 한글 음절(2,345)이 이미 교집합(2,350)의 부분집합이고(
 
 ### ✅ 수정됨 (2026-08-20)
 
-`build_samplers`(`korean_split.py`)가 `covered_cps` 로 **교집합**(2,441자)을 넘기도록 바꿨다.
+`build_samplers`(`korean/split.py`)가 `covered_cps` 로 **교집합**(2,441자)을 넘기도록 바꿨다.
 `trail`/`wraps`/`specials` 가 이미 `covered_cps` 로 필터링되는 구조라 자동 반영된다.
 
 측정(gen 2,000 라인, `font_id = i % 83`):
@@ -270,7 +270,7 @@ ko 풀의 한글 음절(2,345)이 이미 교집합(2,350)의 부분집합이고(
 
 ## D9. 구두점 비율이 자연 텍스트의 4.6~140배다 (근거 없는 매직 넘버)
 
-**현상.** `_decorate()`(`korean_fontset.py:138-143`)가 토큰마다 두 번 주사위를 굴린다.
+**현상.** `_decorate()`(`korean/fontset.py:138-143`)가 토큰마다 두 번 주사위를 굴린다.
 
 ```python
 if self.wraps and self.rng.random() < self.punct_prob * 0.4:   # 감싸기  → 실효 14%
@@ -281,7 +281,7 @@ if self.trail and self.rng.random() < self.punct_prob:          # 후행    → 
 
 `* 0.4` 는 **최초 커밋부터 있었고 주석도, 별도 인자도 없다.** `punct_prob` 하나로 두 확률을
 묶어 조절하려고 상대비를 박아 넣은 매직 넘버다. `punct_prob=0.35`, `special_prob=0.08` 도
-`korean_split.py:140-143` 에 하드코딩이라 CLI 노브가 없다.
+`korean/split.py:140-143` 에 하드코딩이라 CLI 노브가 없다.
 
 **같은 코퍼스와 비교하면 과다하다.** `korean_lines.txt` 의 169,014 어절 실측:
 

@@ -4,7 +4,7 @@ import torch.nn as nn
 from models.smooth_ce import SmoothCrossEntropyLoss
 from models.teacher_forcing import NoisyTeacherForcing
 import evaluate
-from custom_datasets.alphabet import Alphabet
+from custom_datasets.upstream.alphabet import Alphabet
 
 
 class AutoencoderLoss(nn.Module):

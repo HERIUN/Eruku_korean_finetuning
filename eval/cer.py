@@ -43,7 +43,8 @@ def cer(hyp, ref):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ckpt", required=True)
+    ap.add_argument("--ckpt", required=True,
+                    help="로컬 .pth 경로 또는 HF repo id (예: HERIUN/eruku_korean)")
     ap.add_argument("--vae-checkpoint", default=None,
                     help="한글 적응 VAE(vae_sXXXX) 로 교체 평가. 주면 ckpt 의 옛 vae.* 를 strip")
     ap.add_argument("--fonts-dir", default=str(HERE / "assets/fonts_korean_v2/train"))

@@ -16,10 +16,10 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from .constants import FONT_SQUARE_CHARSET
-from .alphabet import Alphabet
+from ..upstream.constants import FONT_SQUARE_CHARSET
+from ..upstream.alphabet import Alphabet
 
-HERE = Path(__file__).resolve().parent.parent
+HERE = Path(__file__).resolve().parents[2]   # 저장소 루트
 CHARSET_JSON = HERE / "assets" / "korean_charset.json"
 CORPUS = HERE / "assets" / "corpus"
 
