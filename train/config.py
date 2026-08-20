@@ -38,6 +38,8 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 # (cwd 가 어디든 같은 곳을 가리키게. 이미 절대경로면 그대로 둔다.)
 PATH_KEYS = frozenset({
     "english_fonts_dir", "val_fonts_dir", "val_english_fonts_dir",
+    "korean_fonts_dir", "backgrounds_dir",
+    "corpus_korean", "corpus_chars", "corpus_english",
     "eruku_pretrained", "lines_json", "resume", "ocr_checkpoint",
 })
 
@@ -108,6 +110,21 @@ def parse_args(parser: argparse.ArgumentParser, argv=None, default_config=None):
     args.sampler = sampler
     args.config_path = known.config
     return args
+
+
+#: 없으면 학습이 곧바로 실패하는 입력 자산 (모델 ckpt 는 HF 자동 다운로드라 제외)
+REQUIRED_PATHS = ("corpus_korean", "corpus_chars", "corpus_english",
+                  "korean_fonts_dir", "backgrounds_dir", "english_fonts_dir")
+
+
+def check_paths(args) -> list[str]:
+    """존재하지 않는 입력 자산 경로 목록. 학습 시작 전에 찍어 주기 위한 것."""
+    missing = []
+    for k in REQUIRED_PATHS:
+        v = getattr(args, k, None)
+        if v and not Path(v).exists():
+            missing.append(f"{k} = {v}")
+    return missing
 
 
 def effective(args, parser=None) -> dict:

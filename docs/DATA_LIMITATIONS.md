@@ -11,7 +11,7 @@
 | [D2](#d2-charstxt-가-ko-풀에-낱글자로-섞여-들어간다) | `chars.txt` 가 ko 풀에 낱글자로 합류 → 전체 토큰의 14.4% | 중 — 텍스트 자연스러움 실험의 교란변수 | 낮음 | 미해결 |
 | [D3](#d3-style_text-의-224-가-단어-중간에서-잘린다) | `style_text` 의 **22.4%** 가 단어 중간에서 절단 | 중 | 낮음 | 미해결 |
 | [D4](#d4-영어-풀이-사전-덤프에서-균등추첨이라-상용어가-없다) | 영어 풀이 균등추첨 → 상용어 0개, resume 시 어휘 전면 교체 | 중 | 낮음 | 미해결 |
-| [D5](#d5-held-out-폰트로-데이터를-만들어도-샘플러는-train-폰트-기준이다) | held-out 폰트 데이터셋도 샘플러는 train 폰트 기준 | 낮음 — 평가 신뢰성 | 낮음 | 미해결 |
+| [D5](#d5-held-out-폰트로-데이터를-만들어도-샘플러는-train-폰트-기준이다) | held-out 폰트 데이터셋도 샘플러는 train 폰트 기준 | 낮음 — 평가 신뢰성 | 낮음 | **✅ 2026-08-20 수정** |
 | [D6](#d6-fonts_charsetsjson-갱신-스크립트가-없다) | `fonts_charsets.json` 갱신 스크립트 없음 | 낮음 — 폰트 추가 시 조용한 두부 유입 | 낮음 | 미해결 |
 | [D7](#d7-fonts_sizesjson-이-없어-매-학습마다-재캘리브레이션한다) | `fonts_sizes.json` 부재 → 매 학습 재캘리브레이션 | 매우 낮음 — 기동 시간만 | 낮음 | 미해결 |
 | [D8](#d8-_covered-가-합집합으로-검사해-구두점이-렌더에서-조용히-삭제된다) | `_covered` 가 **합집합**으로 검사 → 구두점이 렌더에서 조용히 삭제 | 중 — 라인의 7.1% | **매우 낮음** | **✅ 2026-08-20 수정** |
@@ -101,7 +101,8 @@ if len(txt) > self.max_chars:
     txt = txt[: self.max_chars].rstrip()
 ```
 
-`max_chars` 는 CLI 노브가 없고 `korean/split.py:140-143` 에 **style 40 / gen 130** 으로 하드코딩돼 있다.
+`max_chars` 는 이제 config 에 있다 — `configs/base.yaml` 의 `data.sampler.max_chars`
+(기본 style 40 / gen 130). 절단이 단어 경계를 무시하는 문제 자체는 그대로다.
 
 | | 평균 글자수 | 평균 어절수 | `max_chars` 도달(=절단) |
 |---|---|---|---|
@@ -148,7 +149,7 @@ resume 시 풀만은 고정 seed 로 만들도록 분리하는 것도 검토.
 
 ## D5. held-out 폰트로 데이터를 만들어도 샘플러는 train 폰트 기준이다
 
-**현상.** `build_samplers()` 는 `fonts_dir` 인자를 받지 않고 train 폰트 json 을 하드코딩한다.
+**현상**(수정 전). `build_samplers()` 는 `fonts_dir` 인자를 받지 않고 train 폰트 json 을 하드코딩했다.
 
 ```python
 def make_dataset(..., fonts_dir=None, ...):
@@ -162,8 +163,20 @@ def make_dataset(..., fonts_dir=None, ...):
 (`render_font.py:74-76`). held-out 평가에서 텍스트가 의도보다 짧아질 수 있다.
 실측상 train 폰트끼리도 300라인 중 16라인(5.3%)에서 글자 손실이 있었다.
 
-**개선안.** `build_samplers(fonts_dir=...)` 로 대상 폰트 디렉토리의 json 을 쓰게 한다.
-D1 을 폰트별 샘플링으로 고치면 자연히 해소된다.
+### ✅ 수정됨 (2026-08-20)
+
+`build_samplers(fonts_dir=...)` 가 **그 폰트 디렉토리의 `fonts_charsets.json`** 을 쓴다
+(`charsets_json_for()`; 폰트 경로 **리스트**를 받았거나 json 이 없으면 `paths['korean_fonts_dir']`
+로 폴백). `make_dataset` 이 자기 `fonts_dir` 을 그대로 넘기므로 held-out 데이터셋은 자동으로
+held-out charset 을 쓴다.
+
+```
+train 폰트(83종): cps 2441 (intersection, train)
+test  폰트(16종): cps 2499 (intersection, test)   ← 이제 자기 폰트 기준
+```
+
+샘플러 로그 끝에 어느 디렉토리의 charset 인지 함께 찍는다.
+[D1](#d1-학습에-등장하는-한글-음절이-2350자뿐이다) 을 폰트별 샘플링으로 고치면 이 항목도 흡수된다.
 
 ---
 

@@ -123,6 +123,37 @@ class KoreanSplitFontSquare(OnlineSplitFontSquare):
         }
 
 
+# ─────────────────── 입력 자산 경로 (configs/*.yaml 의 paths: 섹션) ───────────────────
+# 코드 기본값 = 저장소 동봉 자산. config/CLI 로 바꿀 수 있다(다른 코퍼스·폰트로 실험).
+DEFAULT_PATHS = {
+    "corpus_korean": ASSETS / "corpus/korean_lines.txt",    # 한글 어절 공급
+    "corpus_chars": ASSETS / "corpus/chars.txt",            # 낱글자 (ko 풀에 합류)
+    "corpus_english": ASSETS / "corpus/english_words.txt",  # 영어 단어 사전
+    "korean_fonts_dir": ASSETS / "fonts_korean_v2/train",   # 한글 writer 풀 (+ fonts_charsets.json)
+    "backgrounds_dir": ASSETS / "backgrounds",              # style 종이 배경 패치
+}
+
+
+def data_paths(overrides: dict | None = None) -> dict:
+    """DEFAULT_PATHS + overrides. None/빈 값은 기본값 유지."""
+    paths = dict(DEFAULT_PATHS)
+    for k, v in (overrides or {}).items():
+        if k not in paths:
+            raise KeyError(f"알 수 없는 데이터 경로: {k!r} (가능: {sorted(paths)})")
+        if v:
+            paths[k] = Path(v)
+    return paths
+
+
+def charsets_json_for(fonts_dir, fallback_dir):
+    """fonts_dir 안의 fonts_charsets.json. 없으면(폰트 리스트를 받았거나 json 부재) fallback."""
+    if fonts_dir is not None and not isinstance(fonts_dir, (list, tuple)):
+        p = Path(fonts_dir) / "fonts_charsets.json"
+        if p.exists():
+            return p
+    return Path(fallback_dir) / "fonts_charsets.json"
+
+
 def font_charset_cps(charsets_json, rule="intersection"):
     """폰트 charset json → (covered_cps, 한글음절 리스트).
 
@@ -144,18 +175,26 @@ def font_charset_cps(charsets_json, rule="intersection"):
     return cps, syls
 
 
-def build_samplers(style_range, gen_range, seed=42, sampler_cfg=None, n_english=None):
-    """한글 style/gen sampler 2개. sampler_cfg = configs/*.yaml 의 data.sampler
-    (미지정 키는 G.SAMPLER_DEFAULTS). n_english 는 하위호환 단축 인자."""
+def build_samplers(style_range, gen_range, seed=42, sampler_cfg=None, n_english=None,
+                   paths=None, fonts_dir=None):
+    """한글 style/gen sampler 2개.
+
+    sampler_cfg: configs/*.yaml 의 data.sampler (미지정 키는 G.SAMPLER_DEFAULTS)
+    paths:       configs/*.yaml 의 paths: (미지정은 DEFAULT_PATHS)
+    fonts_dir:   실제로 렌더에 쓸 폰트 디렉토리. 그 안의 fonts_charsets.json 을 쓴다
+                 → held-out 폰트로 데이터를 만들면 charset 도 그 폰트 기준이 된다
+                 (docs/DATA_LIMITATIONS.md D5). 폰트 리스트를 받았거나 json 이 없으면
+                 paths['korean_fonts_dir'] 로 폴백.
+    n_english:   하위호환 단축 인자."""
     cfg = G.sampler_config(sampler_cfg)
+    pth = data_paths(paths)
     if n_english is not None:
         cfg["n_english"] = n_english
     rng = random.Random(seed)
-    pools = G.build_pools(ASSETS / "corpus/korean_lines.txt",
-                          ASSETS / "corpus/chars.txt",
-                          str(ASSETS / "corpus/english_words.txt"), cfg["n_english"], rng)
-    cps, syls = font_charset_cps(ASSETS / "fonts_korean_v2/train/fonts_charsets.json",
-                                 cfg["charset_rule"])
+    pools = G.build_pools(pth["corpus_korean"], pth["corpus_chars"],
+                          str(pth["corpus_english"]), cfg["n_english"], rng)
+    csj = charsets_json_for(fonts_dir, pth["korean_fonts_dir"])
+    cps, syls = font_charset_cps(csj, cfg["charset_rule"])
     mk = lambda rng_, lo, hi, mc: G.MixedLineSampler(
         pools["ko"], pools["en"], cps, cfg["weights"], lo, hi, mc,
         cfg["punct_prob"], cfg["special_prob"], rng_, rand_syllables=syls,
@@ -163,17 +202,17 @@ def build_samplers(style_range, gen_range, seed=42, sampler_cfg=None, n_english=
     style_s = mk(rng, style_range[0], style_range[1], cfg["max_chars"]["style"])
     gen_s = mk(rng, gen_range[0], gen_range[1], cfg["max_chars"]["gen"])
     print(f"samplers: style {style_range} gen {gen_range} | ko {len(pools['ko'])} en {len(pools['en'])} "
-          f"rand_syl {len(syls)} cps {len(cps)} ({cfg['charset_rule']}) | "
+          f"rand_syl {len(syls)} cps {len(cps)} ({cfg['charset_rule']}, {csj.parent.name}) | "
           f"w {cfg['weights']} punct {cfg['punct_prob']} wrap {cfg['wrap_prob']} "
           f"special {cfg['special_prob']} max_chars {cfg['max_chars']}")
     return style_s, gen_s
 
 
-def split_train_fonts(val_frac, seed=42, fonts_dir=None):
+def split_train_fonts(val_frac, seed=42, fonts_dir=None, paths=None):
     """학습 폰트를 (train_fonts, val_fonts) 리스트로 결정적 분할. val_frac = val 폰트 비율.
 
     같은 (val_frac, seed) 면 항상 같은 분할 → run 간 재현 가능. val_frac=0 이면 val 은 빈 리스트."""
-    d = Path(fonts_dir) if fonts_dir else (ASSETS / "fonts_korean_v2/train")
+    d = Path(fonts_dir) if fonts_dir else data_paths(paths)["korean_fonts_dir"]
     fonts = sorted(p for p in d.glob("*") if p.suffix.lower() in (".ttf", ".otf"))
     idx = list(range(len(fonts)))
     random.Random(seed).shuffle(idx)
@@ -184,22 +223,24 @@ def split_train_fonts(val_frac, seed=42, fonts_dir=None):
 
 
 def make_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, seed=42, fonts_dir=None,
-                 legacy=False, sampler_cfg=None):
+                 legacy=False, sampler_cfg=None, paths=None):
     """fonts_dir: None=학습 폰트 전체(fonts_korean_v2/train) / 디렉토리 경로 / 폰트 경로 리스트
     (split_train_fonts 의 분할 결과). held-out 은 fonts_korean_v2/test 디렉토리 전달.
     legacy=True: 원본 composite transform(데이터 정책 변경 전) 사용.
-    sampler_cfg: configs/*.yaml 의 data.sampler (None=G.SAMPLER_DEFAULTS)."""
-    style_s, gen_s = build_samplers(style_range, gen_range, seed=seed, sampler_cfg=sampler_cfg)
+    sampler_cfg: configs/*.yaml 의 data.sampler (None=G.SAMPLER_DEFAULTS)
+    paths: configs/*.yaml 의 paths: (None=DEFAULT_PATHS)."""
+    pth = data_paths(paths)
     if fonts_dir is None:
-        fonts_dir = ASSETS / "fonts_korean_v2/train"
+        fonts_dir = pth["korean_fonts_dir"]
     elif not isinstance(fonts_dir, (list, tuple)):
         fonts_dir = Path(fonts_dir)
-    return KoreanSplitFontSquare(fonts_dir,
-                                 str(ASSETS / "backgrounds"),
+    style_s, gen_s = build_samplers(style_range, gen_range, seed=seed, sampler_cfg=sampler_cfg,
+                                    paths=paths, fonts_dir=fonts_dir)
+    return KoreanSplitFontSquare(fonts_dir, str(pth["backgrounds_dir"]),
                                  style_s, gen_s, length=length, legacy=legacy)
 
 
-def build_english_samplers(style_range, gen_range, fonts_dir, seed=42, sampler_cfg=None):
+def build_english_samplers(style_range, gen_range, fonts_dir, seed=42, sampler_cfg=None, paths=None):
     """영어 전용(라틴 폰트) sampler. ko=0, en+num 만 → 한글 토푸 방지.
     cps = 영어 폰트 charset union (없으면 ASCII 가시문자).
 
@@ -208,9 +249,10 @@ def build_english_samplers(style_range, gen_range, fonts_dir, seed=42, sampler_c
     숫자가 randint 폴백만 남는다. 대신 렌더 단계의 글자 삭제를 그대로 감수한다.
     docs/DATA_LIMITATIONS.md D8 참고."""
     cfg = G.sampler_config(sampler_cfg)
+    pth = data_paths(paths)
     rng = random.Random(seed)
-    pools = G.build_pools(ASSETS / "corpus/korean_lines.txt", ASSETS / "corpus/chars.txt",
-                          str(ASSETS / "corpus/english_words.txt"), cfg["n_english"], rng)
+    pools = G.build_pools(pth["corpus_korean"], pth["corpus_chars"],
+                          str(pth["corpus_english"]), cfg["n_english"], rng)
     csf = Path(fonts_dir) / "fonts_charsets.json"
     cps = font_charset_cps(csf, "union")[0] if csf.exists() else set(range(0x20, 0x7f))
     w = {"ko": 0.0, "en": 0.80, "num": 0.20, "rand": 0.0}   # 영어 단어 + 숫자만
@@ -226,12 +268,12 @@ def build_english_samplers(style_range, gen_range, fonts_dir, seed=42, sampler_c
 
 
 def make_english_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, seed=42, fonts_dir=None,
-                         sampler_cfg=None):
+                         sampler_cfg=None, paths=None):
     """라틴 폰트로 영어 전용 split 데이터. 학습에 한글 데이터와 섞어 영어 스타일 다양성 보강."""
     assert fonts_dir, "english fonts_dir 필요"
     style_s, gen_s = build_english_samplers(style_range, gen_range, fonts_dir, seed=seed,
-                                            sampler_cfg=sampler_cfg)
-    return KoreanSplitFontSquare(Path(fonts_dir), str(ASSETS / "backgrounds"),
+                                            sampler_cfg=sampler_cfg, paths=paths)
+    return KoreanSplitFontSquare(Path(fonts_dir), str(data_paths(paths)["backgrounds_dir"]),
                                  style_s, gen_s, length=length)
 
 

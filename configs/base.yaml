@@ -3,7 +3,7 @@
 # 이 파일 하나에 "무엇을 조절할 수 있는가"가 전부 들어 있다. 각 phase config 는
 # `_base_: base.yaml` 로 상속해 **다른 것만** 적는다.
 # 우선순위: CLI > 이 yaml > 코드 기본값.  키 이름 = CLI 인자명(-- 없이, - 는 _ 로).
-# 섹션(run/model/optim/data/val)은 사람이 읽기 위한 그룹일 뿐 동작에 영향 없다.
+# 섹션(run/model/optim/paths/data/val)은 사람이 읽기 위한 그룹일 뿐 동작에 영향 없다.
 
 run:
   out: finetune_runs/korean          # 산출물 디렉토리 (ckpt, 로그, 샘플)
@@ -16,11 +16,15 @@ run:
   save_samples: 0                    # 학습 시작 시 데이터 샘플 N개 저장(0=안 함)
 
 model:
-  t5_checkpoint: google-t5/t5-large
-  vae_checkpoint: blowing-up-groundhogs/emuru_vae
-  eruku_pretrained: model_zoo/eruku_pretrained/000073688.pth   # 영어 pretrained
+  t5_checkpoint: google-t5/t5-large  # config 만 사용(가중치 아님) — T5 본체는 랜덤 초기화 후 학습
+  vae_checkpoint: blowing-up-groundhogs/emuru_vae   # HF 에서 자동 다운로드 (~300MB)
+  # 영어 pretrained 시작점. **로컬 캐시 경로**이고, 파일이 없으면 HF
+  # blowing-up-groundhogs/eruku 의 pytorch_model.bin (~2.9GB) 을 자동으로 받는다.
+  # 저장소에 동봉돼 있지 않으므로 기본 상태에서는 항상 자동 다운로드된다(정상).
+  # resume 이 지정되면 무시된다(resume ckpt 가 모델).
+  eruku_pretrained: model_zoo/eruku_pretrained/000073688.pth
   reset_vae: false                   # ckpt 의 vae.* 를 버리고 위 vae_checkpoint 유지
-  ocr_checkpoint: null               # OrigamiNet (OCR loss 쓸 때만)
+  ocr_checkpoint: null               # OrigamiNet (OCR loss 쓸 때만. alpha=1.0 이라 기본 미사용)
   jamo_text: false                   # 텍스트 조건을 NFD 자모로 분해 (A/B 기각됨, 재현용)
 
 optim:
@@ -32,12 +36,22 @@ optim:
   max_img_len: 8192                  # 디코더 시퀀스 픽셀폭 예산(=//8 토큰). 원본 8192
                                      #   style ≤ max_img_len/2, gen ≤ 잔여. 초과 샘플은 drop
 
+# 입력 자산 — 코퍼스와 폰트/배경 디렉토리. 상대경로는 저장소 루트 기준으로 펴진다.
+# 다른 코퍼스·폰트로 실험할 때 여기만 바꾸면 된다(코드 수정 불필요).
+paths:
+  corpus_korean: assets/corpus/korean_lines.txt     # 한글 어절 공급 (고유 941줄 → 어절 5,196)
+  corpus_chars: assets/corpus/chars.txt             # 낱글자 2,345 (ko 풀에 합류)
+  corpus_english: assets/corpus/english_words.txt   # 영어 사전 466,551 (dwyl/english-words)
+  korean_fonts_dir: assets/fonts_korean_v2/train    # 한글 writer 83종 (+ fonts_charsets.json)
+  english_fonts_dir: assets/fonts_english           # 라틴 writer 177종 (english_frac > 0 일 때)
+  backgrounds_dir: assets/backgrounds               # style 종이배경 패치
+  # 평가/held-out 폰트는 val 섹션의 val_fonts_dir 참고 (assets/fonts_korean_v2/test = 16종)
+
 data:
   online_split: true                 # 온라인 합성(권장). false 면 lines_json 사용
   lines_json: null                   # 오프라인 데이터 경로 (online_split=false 일 때)
   style_words: [1, 8]                # style 라인 어절수 [min, max]
   gen_words: [1, 32]                 # gen(target) 라인 어절수 [min, max]
-  english_fonts_dir: assets/fonts_english
   english_frac: 0.0                  # 학습 샘플 중 라틴 폰트 영어 데이터 비율
   legacy_transform: false            # 원본 composite 증강(합쳐 렌더+경계분할) 재현
   text_dropout: 0.1                  # 논문 p_uncond — style+gen 텍스트 통째 drop (CFG 학습)
@@ -64,7 +78,8 @@ data:
 
 val:
   val_every: 0                       # N virtual step 마다 val loss (0=비활성)
-  val_fonts_dir: null                # null=학습 폰트에서 val_font_frac 만큼 분할
+  val_fonts_dir: null                # 평가용 held-out 폰트. null=학습 폰트에서 val_font_frac 만큼 분할
+                                     # 완전 미노출로 보려면: assets/fonts_korean_v2/test (16종)
   val_font_frac: 0.1                 # val 폰트는 학습에서 제외 → 폰트 일반화 측정
   val_english_fonts_dir: null
   val_samples: 0                     # val 세트 총 샘플 수 (0=val_batches × batch_size)

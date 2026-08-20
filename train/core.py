@@ -85,6 +85,13 @@ def make_parser():
     p.add_argument("--gen-words", nargs=2, type=int, default=[1, 32], help="online: gen(target) 어절수 범위")
     p.add_argument("--english-fonts-dir", default=str(HERE / "assets" / "fonts_english"),
                    help="라틴(영어) 폰트 디렉토리. 영어 전용 데이터 writer 풀")
+    # ── 입력 자산 경로 (config paths: 섹션). 미지정 시 custom_datasets/korean/split.py DEFAULT_PATHS ──
+    p.add_argument("--korean-fonts-dir", default=None,
+                   help="한글 writer 폰트 디렉토리. 그 안의 fonts_charsets.json 이 샘플러 charset 이 된다")
+    p.add_argument("--backgrounds-dir", default=None, help="style 종이배경 패치 디렉토리")
+    p.add_argument("--corpus-korean", default=None, help="한글 어절 코퍼스 (.txt 또는 lines_json)")
+    p.add_argument("--corpus-chars", default=None, help="낱글자 charset 파일 (ko 풀에 합류)")
+    p.add_argument("--corpus-english", default=None, help="영어 단어 사전")
     p.add_argument("--english-frac", type=float, default=0.0,
                    help="학습 샘플 중 영어 전용(라틴 폰트) 비율(0=미사용). 한글폰트는 영어도 렌더하지만 "
                         "라틴 폰트로 영어 스타일 다양성을 추가 노출 → 영어 fidelity·획 다양성 보강")
@@ -115,6 +122,15 @@ def make_parser():
     p.add_argument("--val-seed", type=int, default=1234,
                    help="val 세트 생성 시드(고정 → step 간 동일 샘플로 공정 비교)")
     return p
+
+
+#: config/CLI 인자 이름 → korean/split.py DEFAULT_PATHS 키
+PATH_ARGS = ("korean_fonts_dir", "backgrounds_dir", "corpus_korean", "corpus_chars", "corpus_english")
+
+
+def data_paths_of(args) -> dict:
+    """args 에서 데이터 경로 override 만 추려 dict 로. 미지정(None)은 기본값 유지."""
+    return {k: getattr(args, k, None) for k in PATH_ARGS if getattr(args, k, None)}
 
 
 def parse_args(argv=None, default_config=None):
@@ -241,12 +257,13 @@ def _load_or_build_val_samples(args, out_dir, val_fonts=None):
     if ko_n > 0:
         kds = _mk(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
                   length=ko_n * 60, seed=args.val_seed,
-                  fonts_dir=(args.val_fonts_dir or val_fonts), sampler_cfg=args.sampler)
+                  fonts_dir=(args.val_fonts_dir or val_fonts), sampler_cfg=args.sampler,
+                  paths=data_paths_of(args))
         got, ko_skip = _draw_safe(kds, ko_n); samples += got
     if en_n > 0:
         eds = _mken(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
                     length=en_n * 60, seed=args.val_seed + 777, fonts_dir=en_fonts,
-                    sampler_cfg=args.sampler)
+                    sampler_cfg=args.sampler, paths=data_paths_of(args))
         got, en_skip = _draw_safe(eds, en_n); samples += got
     # deterministic shuffle → 배치마다 한글/영어가 섞이게(비율 편중 방지)
     random.Random(args.val_seed).shuffle(samples)
@@ -262,6 +279,13 @@ def train(args):
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
     device = torch.device(args.device)
+
+    # ── 입력 자산 존재 확인 (폰트/코퍼스가 없으면 데이터 생성에서 죽는다) ──
+    #    모델 ckpt 는 없으면 HF 에서 자동 다운로드하므로 여기서 안 본다.
+    _missing = _config.check_paths(args)
+    if _missing:
+        raise FileNotFoundError("입력 자산 경로가 없습니다 (configs 의 paths: 확인):\n  "
+                                + "\n  ".join(_missing))
 
     # ── run config 기록: train_config.yml 에 run 히스토리 누적 ──
     cfg_path = out_dir / "train_config.yml"
@@ -373,7 +397,8 @@ def train(args):
         # (--val-fonts-dir 지정 시엔 그 디렉토리가 val, 학습은 전체 폰트 사용)
         if not args.val_fonts_dir and args.val_font_frac > 0:
             from custom_datasets.korean.split import split_train_fonts
-            train_fonts, val_fonts = split_train_fonts(args.val_font_frac, seed=args.val_seed)
+            train_fonts, val_fonts = split_train_fonts(args.val_font_frac, seed=args.val_seed,
+                                                       paths=data_paths_of(args))
             print(f"폰트 분할: train {len(train_fonts)} / val {len(val_fonts)} "
                   f"(val-font-frac={args.val_font_frac}, seed={args.val_seed}) "
                   f"| val 폰트: {', '.join(p.stem for p in val_fonts)}")
@@ -392,10 +417,11 @@ def train(args):
             ko_len = total_len - en_len
             ko_ds = make_dataset(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
                                  length=ko_len, seed=args.seed + seed_off, legacy=args.legacy_transform,
-                                 fonts_dir=train_fonts, sampler_cfg=args.sampler)
+                                 fonts_dir=train_fonts, sampler_cfg=args.sampler, paths=data_paths_of(args))
             en_ds = make_english_dataset(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
                                          length=en_len, seed=args.seed + seed_off + 777,
-                                         fonts_dir=args.english_fonts_dir, sampler_cfg=args.sampler)
+                                         fonts_dir=args.english_fonts_dir, sampler_cfg=args.sampler,
+                                         paths=data_paths_of(args))
             dataset = ConcatDataset([ko_ds, en_ds])
             print(f"combined data: 한글폰트 {ko_len} + 영어폰트 {en_len} "
                   f"(english_frac={args.english_frac}, en fonts={en_ds.renderers_length})")
@@ -408,7 +434,7 @@ def train(args):
             dataset = make_dataset(style_range=tuple(args.style_words),
                                    gen_range=tuple(args.gen_words),
                                    length=total_len, seed=args.seed + seed_off, legacy=args.legacy_transform,
-                                   fonts_dir=train_fonts, sampler_cfg=args.sampler)
+                                   fonts_dir=train_fonts, sampler_cfg=args.sampler, paths=data_paths_of(args))
             if args.save_samples > 0:
                 dump_samples(dataset, args.save_samples, out_dir / "train_samples",
                              model=model, max_img_len=args.max_img_len)

@@ -36,14 +36,19 @@ data:
 
 ## 구조
 
-섹션(`run` / `model` / `optim` / `data` / `val`)은 **사람이 읽기 위한 그룹**일 뿐이다.
+섹션(`run` / `model` / `optim` / `paths` / `data` / `val`)은 **사람이 읽기 위한 그룹**일 뿐이다.
 어느 섹션에 두든 동작은 같고, 키 이름이 CLI 인자명(`--style-words` → `style_words`)과
 같기만 하면 된다. 정의되지 않은 키는 **에러**로 막는다(오타가 조용히 무시되지 않게).
 
 예외는 `data.sampler` 하나다. 이건 argparse 인자가 아니라 텍스트 샘플러
 (`custom_datasets/korean/fontset.py:SAMPLER_DEFAULTS`)에 dict 통째로 전달된다.
 
-경로 값(`english_fonts_dir`, `resume`, `eruku_pretrained` …)은 상대로 적어도
+`paths:` 섹션은 **입력 자산**(코퍼스 3개, 한글/영어 폰트 디렉토리, 배경)을 모은 것이다.
+코드 기본값은 `custom_datasets/korean/split.py:DEFAULT_PATHS` 이고, 여기서 바꾸면
+다른 코퍼스·폰트로 코드 수정 없이 실험할 수 있다. 평가용 held-out 폰트는 `val.val_fonts_dir`
+(예: `assets/fonts_korean_v2/test`) 이며, 지정하면 **그 폰트들의 charset** 이 샘플러에 쓰인다.
+
+경로 값(`corpus_korean`, `korean_fonts_dir`, `resume`, `eruku_pretrained` …)은 상대로 적어도
 저장소 루트 기준 절대경로로 펴진다 → cwd 와 무관하게 같은 곳을 가리킨다.
 
 ## 새 파라미터 추가하기
