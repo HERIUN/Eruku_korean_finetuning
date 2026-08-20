@@ -56,6 +56,21 @@ SPECIAL_TOKEN_COUNT = 3
 # 하나도 공유하지 않는다(코드 = 0xAC00 + 초성·588 + 중성·28 + 종성 인데 28 이 바이트 경계
 # 64 와 안 맞아 종성이 비선형으로 흩어짐). 그래서 모델은 "ㄺ 은 이렇게 그린다" 를 일반화하지
 # 못하고 음절을 통째로 외운다(실측: 음절단위 노출 β +0.152 vs 종성단위 노출 β −0.040).
+_STYLE_CLIP_WARNED = set()
+
+
+def _warn_style_clipped(sl_px: int, max_img_len: int):
+    """style 이 예산 절반에 잘릴 때 1회 경고. 같은 (폭, 예산) 조합은 한 번만."""
+    key = (sl_px // 256, max_img_len)
+    if key in _STYLE_CLIP_WARNED:
+        return
+    _STYLE_CLIP_WARNED.add(key)
+    cap = max_img_len // 2
+    print(f"[get_model_inputs] ⚠️ style {sl_px}px > 예산 절반 {cap}px → 뒷부분이 조건에서 빠집니다. "
+          f"max_img_len 을 {sl_px * 2} 이상으로 올리세요 (configs/{{eval,infer}}.yaml 의 max_img_len). "
+          f"학습 run 과 같은 값을 쓰는 것이 원칙입니다.")
+
+
 class Emuru(torch.nn.Module):
     def __init__(self, t5_checkpoint='google-t5/t5-base',
                  vae_checkpoint='blowing-up-groundhogs/emuru_vae',
@@ -154,6 +169,12 @@ class Emuru(torch.nn.Module):
 
     @torch.no_grad()
     def get_model_inputs(self, style_img, gen_img, style_len, gen_len, max_img_len):
+        """style(+gen) 이미지 → 디코더 prefix embeds.
+
+        추론(gen_img=None)에서는 prefix 가 style 뿐이고, gen 은 generate_batch 가
+        max_new_tokens 만큼 자기회귀로 만든다 → **style 이 길다고 gen 이 잘리는 일은 없다.**
+        잘리는 쪽은 style 자신(max_img_len//2)이며, 그때 경고를 찍는다.
+        """
         bs = len(style_img)
         decoder_inputs_embeds_list = []
         specials_list = []
@@ -187,6 +208,11 @@ class Emuru(torch.nn.Module):
             #   원본은 style 을 고정 8192px 로 패딩(pad_images_fixed)해 latent 폭을 크게 만들어
             #   이 항이 발동 안 하게 했지만, 여기선 배치최대 폭으로만 패딩하므로 *8 로 픽셀 환산해야
             #   style 이 1/8 로 잘리지 않는다. (docs/STYLE_LEN_BUG.md 참고)
+            # 절반 캡에 실제로 걸리는 경우만 경고한다(배치 패딩폭에 의한 clamp 는 정상).
+            # 학습에서는 filter_no_truncation 이 먼저 걸러 여기 도달하지 않으므로, 이 경고가
+            # 뜬다면 (a) 추론에서 style 이 예산 절반을 넘었거나 (b) 필터가 안 도는 경로다.
+            if sl > max_img_len // 2:
+                _warn_style_clipped(sl, max_img_len)
             sl = max(64, min(sl, style_img_embeds.shape[-1] * 8, max_img_len // 2))
 
             # Start with style image embeds
