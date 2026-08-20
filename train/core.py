@@ -85,6 +85,9 @@ def make_parser():
     p.add_argument("--korean-fonts-dir", default=None,
                    help="한글 writer 폰트 디렉토리. 그 안의 fonts_charsets.json 이 샘플러 charset 이 된다")
     p.add_argument("--backgrounds-dir", default=None, help="style 종이배경 패치 디렉토리")
+    p.add_argument("--exclude-fonts", nargs="*", default=None,
+                   help="학습에서 뺄 폰트(파일명 stem). 미지정 시 korean/split.py 의 "
+                        "DEFAULT_EXCLUDE_FONTS. 추론 --exclude-writers 와 같은 목록이어야 한다")
     p.add_argument("--corpus-korean", default=None, help="한글 어절 코퍼스 (.txt 또는 lines_json)")
     p.add_argument("--corpus-english", default=None, help="영어 단어 사전")
     p.add_argument("--english-frac", type=float, default=0.0,
@@ -278,12 +281,13 @@ def _load_or_build_val_samples(args, out_dir, val_fonts=None):
         kds = _mk(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
                   length=ko_n * 60, seed=args.val_seed,
                   fonts_dir=(args.val_fonts_dir or val_fonts), sampler_cfg=args.sampler,
-                  paths=data_paths_of(args))
+                  paths=data_paths_of(args), exclude_fonts=args.exclude_fonts)
         got, ko_skip = _draw_safe(kds, ko_n); samples += got
     if en_n > 0:
         eds = _mken(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
                     length=en_n * 60, seed=args.val_seed + 777, fonts_dir=en_fonts,
-                    sampler_cfg=args.sampler, paths=data_paths_of(args))
+                    sampler_cfg=args.sampler, paths=data_paths_of(args),
+                    exclude_fonts=args.exclude_fonts)
         got, en_skip = _draw_safe(eds, en_n); samples += got
     # deterministic shuffle → 배치마다 한글/영어가 섞이게(비율 편중 방지)
     random.Random(args.val_seed).shuffle(samples)
@@ -412,7 +416,8 @@ def train(args):
         if not args.val_fonts_dir and args.val_font_frac > 0:
             from custom_datasets.korean.split import split_train_fonts
             train_fonts, val_fonts = split_train_fonts(args.val_font_frac, seed=args.val_seed,
-                                                       paths=data_paths_of(args))
+                                                       paths=data_paths_of(args),
+                                                       exclude_fonts=args.exclude_fonts)
             print(f"폰트 분할: train {len(train_fonts)} / val {len(val_fonts)} "
                   f"(val-font-frac={args.val_font_frac}, seed={args.val_seed}) "
                   f"| val 폰트: {', '.join(p.stem for p in val_fonts)}")
@@ -431,11 +436,13 @@ def train(args):
             ko_len = total_len - en_len
             ko_ds = make_dataset(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
                                  length=ko_len, seed=args.seed + seed_off, legacy=args.legacy_transform,
-                                 fonts_dir=train_fonts, sampler_cfg=args.sampler, paths=data_paths_of(args))
+                                 fonts_dir=train_fonts, sampler_cfg=args.sampler, paths=data_paths_of(args),
+                                 exclude_fonts=args.exclude_fonts)
             en_ds = make_english_dataset(style_range=tuple(args.style_words), gen_range=tuple(args.gen_words),
                                          length=en_len, seed=args.seed + seed_off + 777,
                                          fonts_dir=args.english_fonts_dir, sampler_cfg=args.sampler,
-                                         paths=data_paths_of(args))
+                                         paths=data_paths_of(args),
+                                         exclude_fonts=args.exclude_fonts)
             dataset = ConcatDataset([ko_ds, en_ds])
             print(f"combined data: 한글폰트 {ko_len} + 영어폰트 {en_len} "
                   f"(english_frac={args.english_frac}, en fonts={en_ds.renderers_length})")
@@ -448,7 +455,8 @@ def train(args):
             dataset = make_dataset(style_range=tuple(args.style_words),
                                    gen_range=tuple(args.gen_words),
                                    length=total_len, seed=args.seed + seed_off, legacy=args.legacy_transform,
-                                   fonts_dir=train_fonts, sampler_cfg=args.sampler, paths=data_paths_of(args))
+                                   fonts_dir=train_fonts, sampler_cfg=args.sampler, paths=data_paths_of(args),
+                                 exclude_fonts=args.exclude_fonts)
             if args.save_samples > 0:
                 dump_samples(dataset, args.save_samples, out_dir / "train_samples",
                              model=model, max_img_len=args.max_img_len)

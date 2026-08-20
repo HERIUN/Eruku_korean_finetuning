@@ -144,12 +144,28 @@ def data_paths(overrides: dict | None = None) -> dict:
     return paths
 
 
-#: 폰트별로 **그 글자만** 렌더에서 빼는 목록. 폰트 전체를 버리면 writer 다양성이 줄지만
-#: (1/83 = 1.2%), 깨진 글리프 하나만 charset 에서 지우면 그 폰트의 나머지는 그대로 쓸 수 있다.
-#: 근거는 tools/font_audit.py — 83폰트 × 2,350음절 스캔에서 걸린 것은 아래 하나뿐이다.
-#:   UlsanJunggu '델': 글리프 높이 555px (그 폰트 중앙값 74px 의 7.5배). 이 글자가 한 줄에
-#:   들어가면 라인 전체가 64px 로 축소될 때 나머지 글자가 ~8px 로 뭉개진다.
-FONT_GLYPH_BLOCKLIST = {"UlsanJunggu.ttf": "델"}
+#: 학습·평가에서 통째로 빼는 폰트(파일명 stem). 추론의 `--exclude-writers` 와 같은 목록이어야
+#: 학습과 추론이 어긋나지 않는다.
+#:   UlsanJunggu: '델' 글리프 높이 555px (그 폰트 중앙값 74px 의 7.5배). 이 글자가 한 줄에
+#:   들어가면 라인 전체를 64px 로 맞출 때 나머지 글자가 ~8px 로 뭉개진다.
+#:   → 글자만 charset 에서 빼는 방법도 있었지만, 그러면 '델' 이 전 폰트 **교집합**에서 빠져
+#:     rand 음절 풀이 2,350 → 2,349 로 줄어든다. 음절 커버리지가 이미 최대 현안이라(D1)
+#:     폰트를 빼고 음절을 지키는 쪽을 택했다. docs/DATA_LIMITATIONS.md D6.
+#: 근거: tools/font_audit.py — 83폰트 × 2,350음절 전수 스캔에서 걸린 폰트는 이것 하나뿐이다.
+DEFAULT_EXCLUDE_FONTS = ["UlsanJunggu"]
+
+
+def _excluded(name, exclude) -> bool:
+    """폰트 파일명(또는 stem)이 제외 목록에 걸리는지. '#N' 접미사는 무시(추론과 같은 규약)."""
+    stem = Path(name).stem.split("#")[0]
+    return stem in set(exclude or ())
+
+
+def font_files(fonts_dir, exclude=None) -> list:
+    """디렉토리 → 제외 폰트를 뺀 폰트 경로 리스트."""
+    d = Path(fonts_dir)
+    return [p for p in sorted(d.iterdir())
+            if p.suffix.lower() in G.FONT_EXTS and not _excluded(p.name, exclude)]
 
 
 def ensure_font_charsets(fonts_dir) -> Path | None:
@@ -179,33 +195,21 @@ def ensure_font_charsets(fonts_dir) -> Path | None:
         return None
     jf = d / "fonts_charsets.json"
     cs = json.load(open(jf)) if jf.exists() else {}
-    # 깨진 글리프 제거는 매번 강제한다 — json 을 다시 만들어도 되살아나지 않게
-    blocked = 0
-    for fname, chars in FONT_GLYPH_BLOCKLIST.items():
-        if fname in cs and any(c in cs[fname] for c in chars):
-            cs[fname] = "".join(c for c in cs[fname] if c not in chars)
-            blocked += 1
     missing = [p for p in fonts if p.name not in cs]
-    if not missing and not blocked:
+    if not missing:
         return jf
-    if blocked:
-        print(f"fonts_charsets: 깨진 글리프 제외 적용 {blocked}개 폰트 {FONT_GLYPH_BLOCKLIST}")
-    if missing:
-        print(f"fonts_charsets 갱신: {jf} — 누락 {len(missing)}개 폰트 cmap 읽는 중 ...")
+    print(f"fonts_charsets 갱신: {jf} — 누락 {len(missing)}개 폰트 cmap 읽는 중 ...")
     added, failed = 0, []
     for p in missing:
         try:
-            chars = sorted(chr(c) for c in G.get_cmap(p))
-            drop = FONT_GLYPH_BLOCKLIST.get(p.name, "")
-            cs[p.name] = "".join(c for c in chars if c not in drop)
+            cs[p.name] = "".join(sorted(chr(c) for c in G.get_cmap(p)))
             added += 1
         except Exception as e:                      # 못 읽는 폰트는 남겨두고 알린다
             failed.append(f"{p.name}: {e}")
     tmp = jf.with_suffix(".json.tmp")               # 원자적 교체(워커/중단 대비)
     tmp.write_text(json.dumps(cs, ensure_ascii=False, indent=4), encoding="utf-8")
     tmp.replace(jf)
-    if added:
-        print(f"  +{added}개 추가 → 총 {len(cs)}개 폰트")
+    print(f"  +{added}개 추가 → 총 {len(cs)}개 폰트")
     if failed:
         print(f"  ⚠️ cmap 읽기 실패 {len(failed)}개 (charset 필터 꺼진 채 렌더됨 = 두부 위험): "
               + "; ".join(failed[:3]))
@@ -221,7 +225,7 @@ def charsets_json_for(fonts_dir, fallback_dir):
     return Path(fallback_dir) / "fonts_charsets.json"
 
 
-def font_charset_cps(charsets_json, rule="intersection"):
+def font_charset_cps(charsets_json, rule="intersection", exclude=None):
     """폰트 charset json → (covered_cps, 한글음절 리스트).
 
     rule="intersection": 전 폰트가 그릴 수 있는 글자만. 샘플러가 통과시킨 글자를 렌더가 다시
@@ -232,7 +236,9 @@ def font_charset_cps(charsets_json, rule="intersection"):
     if rule not in ("intersection", "union"):
         raise ValueError(f"charset_rule 은 intersection|union: {rule!r}")
     uni, inter = set(), None
-    for s in json.load(open(charsets_json)).values():
+    for name, s in json.load(open(charsets_json)).items():
+        if _excluded(name, exclude):        # 제외 폰트는 교집합/합집합 계산에서도 뺀다
+            continue
         f = {ord(c) for c in s}
         uni |= f
         inter = f if inter is None else inter & f
@@ -243,7 +249,7 @@ def font_charset_cps(charsets_json, rule="intersection"):
 
 
 def build_samplers(style_range, gen_range, seed=42, sampler_cfg=None, n_english=None,
-                   paths=None, fonts_dir=None):
+                   paths=None, fonts_dir=None, exclude_fonts=None):
     """한글 style/gen sampler 2개.
 
     sampler_cfg: configs/*.yaml 의 data.sampler (미지정 키는 G.SAMPLER_DEFAULTS)
@@ -260,7 +266,8 @@ def build_samplers(style_range, gen_range, seed=42, sampler_cfg=None, n_english=
     rng = random.Random(seed)
     pools = G.build_pools(pth["corpus_korean"], str(pth["corpus_english"]), cfg["n_english"], rng)
     csj = charsets_json_for(fonts_dir, pth["korean_fonts_dir"])
-    cps, syls = font_charset_cps(csj, cfg["charset_rule"])
+    exc = DEFAULT_EXCLUDE_FONTS if exclude_fonts is None else exclude_fonts
+    cps, syls = font_charset_cps(csj, cfg["charset_rule"], exclude=exc)
     mk = lambda rng_, lo, hi, mc: G.MixedLineSampler(
         pools["ko"], pools["en"], cps, cfg["weights"], lo, hi, mc,
         cfg["punct_prob"], cfg["special_prob"], rng_, rand_syllables=syls,
@@ -268,18 +275,20 @@ def build_samplers(style_range, gen_range, seed=42, sampler_cfg=None, n_english=
     style_s = mk(rng, style_range[0], style_range[1], cfg["max_chars"]["style"])
     gen_s = mk(rng, gen_range[0], gen_range[1], cfg["max_chars"]["gen"])
     print(f"samplers: style {style_range} gen {gen_range} | ko {len(pools['ko'])} en {len(pools['en'])} "
-          f"rand_syl {len(syls)} cps {len(cps)} ({cfg['charset_rule']}, {csj.parent.name}) | "
+          f"rand_syl {len(syls)} cps {len(cps)} ({cfg['charset_rule']}, {csj.parent.name}"
+          f"{', 제외 ' + ','.join(exc) if exc else ''}) | "
           f"w {cfg['weights']} punct {cfg['punct_prob']} wrap {cfg['wrap_prob']} "
           f"special {cfg['special_prob']} max_chars {cfg['max_chars']}")
     return style_s, gen_s
 
 
-def split_train_fonts(val_frac, seed=42, fonts_dir=None, paths=None):
+def split_train_fonts(val_frac, seed=42, fonts_dir=None, paths=None, exclude_fonts=None):
     """학습 폰트를 (train_fonts, val_fonts) 리스트로 결정적 분할. val_frac = val 폰트 비율.
 
     같은 (val_frac, seed) 면 항상 같은 분할 → run 간 재현 가능. val_frac=0 이면 val 은 빈 리스트."""
     d = Path(fonts_dir) if fonts_dir else data_paths(paths)["korean_fonts_dir"]
-    fonts = sorted(p for p in d.glob("*") if p.suffix.lower() in (".ttf", ".otf"))
+    exc = DEFAULT_EXCLUDE_FONTS if exclude_fonts is None else exclude_fonts
+    fonts = font_files(d, exc)
     idx = list(range(len(fonts)))
     random.Random(seed).shuffle(idx)
     k = max(1, int(round(len(fonts) * val_frac))) if val_frac > 0 else 0
@@ -289,20 +298,25 @@ def split_train_fonts(val_frac, seed=42, fonts_dir=None, paths=None):
 
 
 def make_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, seed=42, fonts_dir=None,
-                 legacy=False, sampler_cfg=None, paths=None):
+                 legacy=False, sampler_cfg=None, paths=None, exclude_fonts=None):
     """fonts_dir: None=학습 폰트 전체(fonts_korean_v2/train) / 디렉토리 경로 / 폰트 경로 리스트
     (split_train_fonts 의 분할 결과). held-out 은 fonts_korean_v2/test 디렉토리 전달.
     legacy=True: 원본 composite transform(데이터 정책 변경 전) 사용.
     sampler_cfg: configs/*.yaml 의 data.sampler (None=G.SAMPLER_DEFAULTS)
     paths: configs/*.yaml 의 paths: (None=DEFAULT_PATHS)."""
     pth = data_paths(paths)
+    exc = DEFAULT_EXCLUDE_FONTS if exclude_fonts is None else exclude_fonts
     if fonts_dir is None:
         fonts_dir = pth["korean_fonts_dir"]
-    elif not isinstance(fonts_dir, (list, tuple)):
-        fonts_dir = Path(fonts_dir)
     ensure_font_charsets(fonts_dir)          # 새 폰트가 있으면 charset 캐시 갱신 (D6)
+    charset_dir = fonts_dir                  # charset 은 디렉토리 기준으로 찾는다
+    if isinstance(fonts_dir, (list, tuple)):
+        fonts_dir = [p for p in fonts_dir if not _excluded(Path(p).name, exc)]
+    else:
+        charset_dir = Path(fonts_dir)
+        fonts_dir = font_files(charset_dir, exc)     # 제외 폰트를 뺀 명시 리스트로 전달
     style_s, gen_s = build_samplers(style_range, gen_range, seed=seed, sampler_cfg=sampler_cfg,
-                                    paths=paths, fonts_dir=fonts_dir)
+                                    paths=paths, fonts_dir=charset_dir, exclude_fonts=exc)
     return KoreanSplitFontSquare(fonts_dir, str(pth["backgrounds_dir"]),
                                  style_s, gen_s, length=length, legacy=legacy)
 
@@ -334,10 +348,12 @@ def build_english_samplers(style_range, gen_range, fonts_dir, seed=42, sampler_c
 
 
 def make_english_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, seed=42, fonts_dir=None,
-                         sampler_cfg=None, paths=None):
+                         sampler_cfg=None, paths=None, exclude_fonts=None):
     """라틴 폰트로 영어 전용 split 데이터. 학습에 한글 데이터와 섞어 영어 스타일 다양성 보강."""
     assert fonts_dir, "english fonts_dir 필요"
     ensure_font_charsets(fonts_dir)          # 새 폰트가 있으면 charset 캐시 갱신 (D6)
+    if exclude_fonts:                        # 라틴 폰트엔 기본 제외 대상이 없다(있으면 config 로)
+        fonts_dir = [p for p in font_files(fonts_dir, exclude_fonts)]
     style_s, gen_s = build_english_samplers(style_range, gen_range, fonts_dir, seed=seed,
                                             sampler_cfg=sampler_cfg, paths=paths)
     return KoreanSplitFontSquare(Path(fonts_dir), str(data_paths(paths)["backgrounds_dir"]),

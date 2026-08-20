@@ -51,6 +51,9 @@ data:
   style_words: [1, 8]                # style 라인 어절수 [min, max]
   gen_words: [1, 32]                 # gen(target) 라인 어절수 [min, max]
   english_frac: 0.0                  # 학습 샘플 중 라틴 폰트 영어 데이터 비율
+  exclude_fonts: [UlsanJunggu]       # 학습에서 뺄 폰트(파일명 stem). 추론 exclude_writers 와 같아야 함
+                                     #   UlsanJunggu: '델' 글리프가 555px(중앙값 74px) 로 깨져 있어
+                                     #   그 글자가 든 줄 전체가 뭉개진다 (tools/font_audit.py)
   legacy_transform: false            # 원본 composite 증강(합쳐 렌더+경계분할) 재현
   text_dropout: 0.1                  # 논문 p_uncond — style+gen 텍스트 통째 drop (CFG 학습)
   style_text_dropout: 0.0            # 논문 p_drop (Phase 2) — style 텍스트만 drop
