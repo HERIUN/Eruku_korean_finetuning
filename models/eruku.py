@@ -1,4 +1,3 @@
-import unicodedata
 
 import torch
 import os as _os
@@ -57,14 +56,6 @@ SPECIAL_TOKEN_COUNT = 3
 # 하나도 공유하지 않는다(코드 = 0xAC00 + 초성·588 + 중성·28 + 종성 인데 28 이 바이트 경계
 # 64 와 안 맞아 종성이 비선형으로 흩어짐). 그래서 모델은 "ㄺ 은 이렇게 그린다" 를 일반화하지
 # 못하고 음절을 통째로 외운다(실측: 음절단위 노출 β +0.152 vs 종성단위 노출 β −0.040).
-# NFD 로 분해하면 모든 ㄺ 음절이 U+11B0 을 공유하게 되어 종성이 공유 심볼이 된다.
-# ⚠️ 3k step A/B 에서 **기각**(겹받침 0.674 vs control 0.679 = 노이즈 1.5σ 이내, 격차도 안 줄어듦).
-#    병목이 텍스트 심볼 공유가 아니라 조밀한 글리프를 그리는 능력이었다. 재현용으로 남긴다.
-def to_jamo(text: str) -> str:
-    """한글 완성형을 NFD 결합 자모로 분해. 한글 외(라틴·숫자·기호)는 그대로 통과."""
-    return unicodedata.normalize("NFD", text)
-
-
 class Emuru(torch.nn.Module):
     def __init__(self, t5_checkpoint='google-t5/t5-base',
                  vae_checkpoint='blowing-up-groundhogs/emuru_vae',
@@ -72,9 +63,6 @@ class Emuru(torch.nn.Module):
         super(Emuru, self).__init__()
         self.tokenizer = AutoTokenizer.from_pretrained('google/byt5-small')  # per-character tokenizer
         self.tokenizer.add_tokens(["<sog>"])
-        # C1: True 면 텍스트 조건을 자모 분해해서 넣는다. **학습과 추론이 반드시 같아야**
-        # 하므로 두 경로 모두 _encode_text() 하나만 쓴다.
-        self.jamo_text = False
         self.data_collator = HFDataCollector(tokenizer=self.tokenizer)
         self.t5_name_or_path = t5_checkpoint
 
@@ -249,13 +237,8 @@ class Emuru(torch.nn.Module):
         }
 
     def _encode_text(self, style_text, gen_text):
-        """style/gen 텍스트 → (input_ids, attention_mask). 학습·추론 공용 진입점.
-
-        여기 한 곳만 거치게 해서 자모 분해 적용 여부가 두 경로에서 갈리지 않게 한다.
-        """
+        """style/gen 텍스트 → (input_ids, attention_mask). 학습·추론 공용 진입점."""
         pairs = [f"{style}<sog>{gen}" for style, gen in zip(style_text, gen_text)]
-        if self.jamo_text:
-            pairs = [to_jamo(el) for el in pairs]
         enc = self.tokenizer(pairs, padding=True, return_tensors="pt")
         return enc["input_ids"], enc["attention_mask"]
 

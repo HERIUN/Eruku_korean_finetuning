@@ -24,7 +24,6 @@ model:
   eruku_pretrained: blowing-up-groundhogs/eruku
   reset_vae: false                   # ckpt 의 vae.* 를 버리고 위 vae_checkpoint 유지
   ocr_checkpoint: null               # OrigamiNet (OCR loss 쓸 때만. alpha=1.0 이라 기본 미사용)
-  jamo_text: false                   # 텍스트 조건을 NFD 자모로 분해 (A/B 기각됨, 재현용)
 
 optim:
   batch_size: 2

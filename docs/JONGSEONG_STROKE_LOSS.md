@@ -505,6 +505,10 @@ T5 몫 29%p 를 이걸로 설명할 수 없으므로 기각한다. (VAE 몫 8%p 
 `eruku_short_fullmse/s30000` 에서 resume, 3,000 step, 동일 예산(batch 4 × accum 8, lr 5e-5,
 english-frac 0.15). 두 arm 은 `--jamo-text` 만 다르다. 1,000 step 마다 저장해 추세를 봤다.
 
+> **이 플래그는 이후 제거됐다**(기각된 실험이라 유지 비용만 남았다). 아래 기록은 그대로 두되,
+> 재현하려면 `models/eruku.py` 의 `to_jamo` / `_encode_text` 를 되살려야 한다.
+> `finetune_runs/ab_c1_jamo` 의 ckpt 는 지금 코드로 추론하면 `infer/show.py` 가 거부한다.
+
 평가는 M0(자연 어휘, 겹받침 n=500).
 
 음절 **오류율**(낮을수록 좋음 → C1a 가 이기려면 control 보다 **작아야** 한다):
