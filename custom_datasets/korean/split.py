@@ -144,6 +144,14 @@ def data_paths(overrides: dict | None = None) -> dict:
     return paths
 
 
+#: 폰트별로 **그 글자만** 렌더에서 빼는 목록. 폰트 전체를 버리면 writer 다양성이 줄지만
+#: (1/83 = 1.2%), 깨진 글리프 하나만 charset 에서 지우면 그 폰트의 나머지는 그대로 쓸 수 있다.
+#: 근거는 tools/font_audit.py — 83폰트 × 2,350음절 스캔에서 걸린 것은 아래 하나뿐이다.
+#:   UlsanJunggu '델': 글리프 높이 555px (그 폰트 중앙값 74px 의 7.5배). 이 글자가 한 줄에
+#:   들어가면 라인 전체가 64px 로 축소될 때 나머지 글자가 ~8px 로 뭉개진다.
+FONT_GLYPH_BLOCKLIST = {"UlsanJunggu.ttf": "델"}
+
+
 def ensure_font_charsets(fonts_dir) -> Path | None:
     """`fonts_dir/fonts_charsets.json` 이 그 디렉토리의 폰트를 **전부** 담도록 갱신한다.
 
@@ -171,21 +179,33 @@ def ensure_font_charsets(fonts_dir) -> Path | None:
         return None
     jf = d / "fonts_charsets.json"
     cs = json.load(open(jf)) if jf.exists() else {}
+    # 깨진 글리프 제거는 매번 강제한다 — json 을 다시 만들어도 되살아나지 않게
+    blocked = 0
+    for fname, chars in FONT_GLYPH_BLOCKLIST.items():
+        if fname in cs and any(c in cs[fname] for c in chars):
+            cs[fname] = "".join(c for c in cs[fname] if c not in chars)
+            blocked += 1
     missing = [p for p in fonts if p.name not in cs]
-    if not missing:
+    if not missing and not blocked:
         return jf
-    print(f"fonts_charsets 갱신: {jf} — 누락 {len(missing)}개 폰트 cmap 읽는 중 ...")
+    if blocked:
+        print(f"fonts_charsets: 깨진 글리프 제외 적용 {blocked}개 폰트 {FONT_GLYPH_BLOCKLIST}")
+    if missing:
+        print(f"fonts_charsets 갱신: {jf} — 누락 {len(missing)}개 폰트 cmap 읽는 중 ...")
     added, failed = 0, []
     for p in missing:
         try:
-            cs[p.name] = "".join(sorted(chr(c) for c in G.get_cmap(p)))
+            chars = sorted(chr(c) for c in G.get_cmap(p))
+            drop = FONT_GLYPH_BLOCKLIST.get(p.name, "")
+            cs[p.name] = "".join(c for c in chars if c not in drop)
             added += 1
         except Exception as e:                      # 못 읽는 폰트는 남겨두고 알린다
             failed.append(f"{p.name}: {e}")
     tmp = jf.with_suffix(".json.tmp")               # 원자적 교체(워커/중단 대비)
     tmp.write_text(json.dumps(cs, ensure_ascii=False, indent=4), encoding="utf-8")
     tmp.replace(jf)
-    print(f"  +{added}개 추가 → 총 {len(cs)}개 폰트")
+    if added:
+        print(f"  +{added}개 추가 → 총 {len(cs)}개 폰트")
     if failed:
         print(f"  ⚠️ cmap 읽기 실패 {len(failed)}개 (charset 필터 꺼진 채 렌더됨 = 두부 위험): "
               + "; ".join(failed[:3]))
