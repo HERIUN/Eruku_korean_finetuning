@@ -420,11 +420,28 @@ def main():
     ap.add_argument("--wrap-prob", type=float, default=0.05,
                     help="토큰을 괄호·따옴표로 감쌀 확률 (코퍼스 실측 0.1%%)")
     ap.add_argument("--special-prob", type=float, default=0.08, help="특수기호 단독 삽입 확률")
+    ap.add_argument("--config", default=None,
+                    help="configs/*.yaml 의 data.sampler 로 샘플러 인자 기본값을 채운다 "
+                         "(학습과 같은 텍스트 규칙으로 ref set 을 만들 때). CLI 가 우선")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--no-augment", action="store_true",
                     help="rotation/elastic warp/morph/blur/jitter/배경합성 다 끄고 "
                          "깨끗한 흑백(흰 배경+검은 글씨) ref 생성. 휨 원인(학습 vs ref) 분리용")
     args = ap.parse_args()
+    if args.config:      # 학습 config 의 data.sampler → 이 CLI 의 기본값 (CLI 로 준 값이 우선)
+        import sys as _sys
+        _sys.path.insert(0, str(HERE))
+        from train.config import load_config, flatten
+        scfg = sampler_config(flatten(load_config(args.config))[1])
+        given = {a.split("=")[0].lstrip("-").replace("-", "_") for a in _sys.argv[1:] if a.startswith("--")}
+        for dest, val in (("w_ko", scfg["weights"]["ko"]), ("w_en", scfg["weights"]["en"]),
+                          ("w_num", scfg["weights"]["num"]), ("w_rand", scfg["weights"]["rand"]),
+                          ("punct_prob", scfg["punct_prob"]), ("wrap_prob", scfg["wrap_prob"]),
+                          ("special_prob", scfg["special_prob"]), ("n_english", scfg["n_english"]),
+                          ("max_chars", scfg["max_chars"]["gen"])):
+            if dest not in given:
+                setattr(args, dest, val)
+        print(f"config 적용: {args.config} (data.sampler)")
 
     rng = random.Random(args.seed)
     fonts_dir = Path(args.fonts_dir)
