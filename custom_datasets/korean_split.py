@@ -129,20 +129,27 @@ def build_samplers(style_range, gen_range, n_english=8000, seed=42):
                           ASSETS / "corpus/chars.txt",
                           str(ASSETS / "corpus/english_words.txt"), n_english, rng)
     cs = json.load(open(ASSETS / "fonts_korean_v2/train/fonts_charsets.json"))
-    cps, inter = set(), None
+    inter = None
     for s in cs.values():
         f = {ord(c) for c in s}
-        cps |= f
         inter = f if inter is None else inter & f
-    # rand 음절 풀 = 전 폰트 교집합의 한글 음절 (KS X 1001 2350자) → tofu-safe
+    # covered_cps = 전 폰트 charset 의 **교집합**. 합집합을 쓰면 "어떤 폰트든 하나라도 그리면 통과"라
+    # 정작 배정된 폰트가 못 그리는 글자(…“”‘’~)가 통과했다가 렌더 직전에 조용히 삭제된다
+    # (라인의 7.1%). 교집합으로 좁혀도 ko/en 풀은 100% 살아남아 잃는 게 없다. docs/DATA_LIMITATIONS.md D8.
+    cps = inter
+    # rand 음절 풀 = 그 교집합의 한글 음절 (KS X 1001 2350자) → tofu-safe
     syls = sorted(chr(c) for c in inter if 0xAC00 <= c <= 0xD7A3)
     w = {"ko": 0.45, "en": 0.20, "num": 0.20, "rand": 0.15}
-    style_s = G.MixedLineSampler(pools["ko"], pools["en"], cps, w, style_range[0], style_range[1], 40, 0.35, 0.08, rng,
-                                 rand_syllables=syls)
-    gen_s = G.MixedLineSampler(pools["ko"], pools["en"], cps, w, gen_range[0], gen_range[1], 130, 0.35, 0.08, rng,
-                               rand_syllables=syls)
+    # punct/wrap 은 독립 확률. 코퍼스 실측(후행 7.6% / 감싸기 0.1%) 대비 글리프 노출을 위해
+    # 여전히 상향이지만, 구 값(0.35 / 0.14=0.35*0.4 매직넘버)의 과다 노출은 줄였다. D9.
+    punct, wrap, special = 0.20, 0.05, 0.08
+    style_s = G.MixedLineSampler(pools["ko"], pools["en"], cps, w, style_range[0], style_range[1], 40,
+                                 punct, special, rng, rand_syllables=syls, wrap_prob=wrap)
+    gen_s = G.MixedLineSampler(pools["ko"], pools["en"], cps, w, gen_range[0], gen_range[1], 130,
+                               punct, special, rng, rand_syllables=syls, wrap_prob=wrap)
     print(f"samplers: style {style_range} gen {gen_range} | ko {len(pools['ko'])} en {len(pools['en'])} "
-          f"rand_syl {len(syls)} cps {len(cps)}")
+          f"rand_syl {len(syls)} cps {len(cps)} (font charset 교집합) "
+          f"| punct {punct} wrap {wrap} special {special}")
     return style_s, gen_s
 
 
@@ -176,7 +183,12 @@ def make_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, seed=42, fo
 
 def build_english_samplers(style_range, gen_range, fonts_dir, n_english=8000, seed=42):
     """영어 전용(라틴 폰트) sampler. ko=0, en+num 만 → 한글 토푸 방지.
-    cps = 영어 폰트 charset union (없으면 ASCII 가시문자)."""
+    cps = 영어 폰트 charset union (없으면 ASCII 가시문자).
+
+    ★ 한글 경로(build_samplers)는 교집합을 쓰지만 여기는 **union 유지**다. 영어 폰트 177종의
+    교집합은 63자(A-Za-z0-9+공백)뿐이라 구두점이 전멸하고 gen_number 의 `%,-.:` 까지 걸려
+    숫자가 randint 폴백만 남는다. 대신 렌더 단계의 글자 삭제를 그대로 감수한다.
+    docs/DATA_LIMITATIONS.md D8 참고."""
     rng = random.Random(seed)
     pools = G.build_pools(ASSETS / "corpus/korean_lines.txt", ASSETS / "corpus/chars.txt",
                           str(ASSETS / "corpus/english_words.txt"), n_english, rng)
@@ -188,11 +200,13 @@ def build_english_samplers(style_range, gen_range, fonts_dir, n_english=8000, se
     else:
         cps = set(range(0x20, 0x7f))
     w = {"ko": 0.0, "en": 0.80, "num": 0.20, "rand": 0.0}   # 영어 단어 + 숫자만
+    punct, wrap, special = 0.20, 0.05, 0.08                 # 한글 경로와 동일 (D9)
     style_s = G.MixedLineSampler(pools["ko"], pools["en"], cps, w, style_range[0], style_range[1],
-                                 40, 0.35, 0.08, rng, rand_syllables=[])
+                                 40, punct, special, rng, rand_syllables=[], wrap_prob=wrap)
     gen_s = G.MixedLineSampler(pools["ko"], pools["en"], cps, w, gen_range[0], gen_range[1],
-                               130, 0.35, 0.08, rng, rand_syllables=[])
-    print(f"english samplers: style {style_range} gen {gen_range} | en {len(pools['en'])} cps {len(cps)}")
+                               130, punct, special, rng, rand_syllables=[], wrap_prob=wrap)
+    print(f"english samplers: style {style_range} gen {gen_range} | en {len(pools['en'])} cps {len(cps)} "
+          f"(union) | punct {punct} wrap {wrap} special {special}")
     return style_s, gen_s
 
 

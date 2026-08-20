@@ -104,12 +104,15 @@ class MixedLineSampler:
     빈도 편향 없이 모든 음절을 단어 맥락으로 균등 노출."""
 
     def __init__(self, ko, en, covered_cps, weights, min_words, max_words,
-                 max_chars, punct_prob, special_prob, rng, rand_syllables=None):
+                 max_chars, punct_prob, special_prob, rng, rand_syllables=None,
+                 wrap_prob=0.05):
         self.ko, self.en, self.cps = ko, en, covered_cps
         self.rand = rand_syllables or []
         self.min_words, self.max_words = min_words, max_words
         self.max_chars, self.rng = max_chars, rng
-        self.punct_prob, self.special_prob = punct_prob, special_prob
+        # punct_prob=토큰 뒤 구두점 / wrap_prob=괄호·따옴표로 감싸기 / special_prob=기호 단독 토큰.
+        # 셋 다 독립 확률. (구 코드는 감싸기를 punct_prob*0.4 로 유도했으나 근거 없는 상수였다)
+        self.punct_prob, self.wrap_prob, self.special_prob = punct_prob, wrap_prob, special_prob
         avail = {"ko": ko, "en": en, "num": True, "rand": self.rand}
         self.cats = [c for c in ("ko", "en", "num", "rand")
                      if weights.get(c, 0) > 0 and avail[c]]
@@ -138,7 +141,7 @@ class MixedLineSampler:
         return str(self.rng.randint(0, 999))
 
     def _decorate(self, tok: str) -> str:
-        if self.wraps and self.rng.random() < self.punct_prob * 0.4:
+        if self.wraps and self.rng.random() < self.wrap_prob:
             a, b = self.rng.choice(self.wraps); tok = f"{a}{tok}{b}"
         if self.trail and self.rng.random() < self.punct_prob:
             tok = tok + self.rng.choice(self.trail)
@@ -310,7 +313,7 @@ def gen_split(fonts: list[Path], pools: dict, bgs: list[np.ndarray],
         sampler = MixedLineSampler(ko_cov, en_cov, covered_cps, weights,
                                    args.min_words_per_line, args.max_words_per_line,
                                    args.max_chars, args.punct_prob, args.special_prob, rng,
-                                   rand_syllables=syls)
+                                   rand_syllables=syls, wrap_prob=args.wrap_prob)
         fdir = out_img_dir / person_key
         fdir.mkdir(parents=True, exist_ok=True)
         made = 0
@@ -383,7 +386,10 @@ def main():
     ap.add_argument("--w-num", type=float, default=0.23, help="숫자 비중")
     ap.add_argument("--w-rand", type=float, default=0.0,
                     help="랜덤 음절 가짜단어 비중 (오프라인 ref set 은 기본 0; 온라인 학습은 0.15)")
-    ap.add_argument("--punct-prob", type=float, default=0.35, help="토큰에 구두점 붙일 확률")
+    ap.add_argument("--punct-prob", type=float, default=0.20,
+                    help="토큰 뒤에 구두점 붙일 확률 (코퍼스 실측 7.6%)")
+    ap.add_argument("--wrap-prob", type=float, default=0.05,
+                    help="토큰을 괄호·따옴표로 감쌀 확률 (코퍼스 실측 0.1%)")
     ap.add_argument("--special-prob", type=float, default=0.08, help="특수기호 단독 삽입 확률")
     ap.add_argument("--seed", type=int, default=42)
     ap.add_argument("--no-augment", action="store_true",
