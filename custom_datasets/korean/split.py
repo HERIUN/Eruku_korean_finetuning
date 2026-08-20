@@ -144,6 +144,54 @@ def data_paths(overrides: dict | None = None) -> dict:
     return paths
 
 
+def ensure_font_charsets(fonts_dir) -> Path | None:
+    """`fonts_dir/fonts_charsets.json` 이 그 디렉토리의 폰트를 **전부** 담도록 갱신한다.
+
+    이 json 이 없거나 어떤 폰트의 키가 빠져 있으면, upstream `make_renderers` 가 그 폰트에
+    `charset=None` 을 넘기고 `Render.render()` 의 글자 필터가 통째로 꺼진다 → 두부(□)가
+    조용히 학습 데이터에 섞인다(docs/DATA_LIMITATIONS.md D6). 그래서 데이터셋을 만들기 전에
+    빠진 폰트만 cmap 을 읽어 채운다.
+
+    - 이미 최신이면 파일을 건드리지 않는다(빠진 폰트 0개 → 즉시 반환).
+    - 삭제된 폰트의 키는 남겨 둔다(무해하고, 폰트를 되돌릴 때 재계산이 없다).
+    - fonts_dir 이 폰트 경로 **리스트**면 그 부모 디렉토리를 대상으로 본다.
+    반환: 갱신 대상 json 경로 (디렉토리를 못 정하면 None)
+    """
+    if fonts_dir is None:
+        return None
+    if isinstance(fonts_dir, (list, tuple)):
+        if not fonts_dir:
+            return None
+        fonts_dir = Path(fonts_dir[0]).parent
+    d = Path(fonts_dir)
+    if not d.is_dir():
+        return None
+    fonts = [p for p in sorted(d.iterdir()) if p.suffix.lower() in G.FONT_EXTS]
+    if not fonts:
+        return None
+    jf = d / "fonts_charsets.json"
+    cs = json.load(open(jf)) if jf.exists() else {}
+    missing = [p for p in fonts if p.name not in cs]
+    if not missing:
+        return jf
+    print(f"fonts_charsets 갱신: {jf} — 누락 {len(missing)}개 폰트 cmap 읽는 중 ...")
+    added, failed = 0, []
+    for p in missing:
+        try:
+            cs[p.name] = "".join(sorted(chr(c) for c in G.get_cmap(p)))
+            added += 1
+        except Exception as e:                      # 못 읽는 폰트는 남겨두고 알린다
+            failed.append(f"{p.name}: {e}")
+    tmp = jf.with_suffix(".json.tmp")               # 원자적 교체(워커/중단 대비)
+    tmp.write_text(json.dumps(cs, ensure_ascii=False, indent=4), encoding="utf-8")
+    tmp.replace(jf)
+    print(f"  +{added}개 추가 → 총 {len(cs)}개 폰트")
+    if failed:
+        print(f"  ⚠️ cmap 읽기 실패 {len(failed)}개 (charset 필터 꺼진 채 렌더됨 = 두부 위험): "
+              + "; ".join(failed[:3]))
+    return jf
+
+
 def charsets_json_for(fonts_dir, fallback_dir):
     """fonts_dir 안의 fonts_charsets.json. 없으면(폰트 리스트를 받았거나 json 부재) fallback."""
     if fonts_dir is not None and not isinstance(fonts_dir, (list, tuple)):
@@ -232,6 +280,7 @@ def make_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, seed=42, fo
         fonts_dir = pth["korean_fonts_dir"]
     elif not isinstance(fonts_dir, (list, tuple)):
         fonts_dir = Path(fonts_dir)
+    ensure_font_charsets(fonts_dir)          # 새 폰트가 있으면 charset 캐시 갱신 (D6)
     style_s, gen_s = build_samplers(style_range, gen_range, seed=seed, sampler_cfg=sampler_cfg,
                                     paths=paths, fonts_dir=fonts_dir)
     return KoreanSplitFontSquare(fonts_dir, str(pth["backgrounds_dir"]),
@@ -268,6 +317,7 @@ def make_english_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, see
                          sampler_cfg=None, paths=None):
     """라틴 폰트로 영어 전용 split 데이터. 학습에 한글 데이터와 섞어 영어 스타일 다양성 보강."""
     assert fonts_dir, "english fonts_dir 필요"
+    ensure_font_charsets(fonts_dir)          # 새 폰트가 있으면 charset 캐시 갱신 (D6)
     style_s, gen_s = build_english_samplers(style_range, gen_range, fonts_dir, seed=seed,
                                             sampler_cfg=sampler_cfg, paths=paths)
     return KoreanSplitFontSquare(Path(fonts_dir), str(data_paths(paths)["backgrounds_dir"]),
