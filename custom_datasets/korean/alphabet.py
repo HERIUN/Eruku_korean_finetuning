@@ -25,12 +25,22 @@ CORPUS = HERE / "assets" / "corpus"
 
 
 def _corpus_syllables() -> list[str]:
-    """코퍼스(korean_lines.txt, chars.txt)에 등장하는 한글 음절(AC00–D7A3) 집합, 정렬."""
+    """코퍼스(korean_lines.txt, chars.txt)에 등장하는 한글 음절(AC00–D7A3) 집합, 정렬.
+
+    ★ `chars.txt` 가 한글 음절의 대부분을 공급한다(2,345 중 korean_lines 기여는 754 뿐).
+      없으면 알파벳이 2,345 → 754 로 쪼그라들어 **학습된 HTR/VAE 가 전부 못 맞는다**
+      (aux_htr_ko/htr_s20000 은 alphabet_size=2512 = 2,509+3 로 고정). 그래서 조용히
+      건너뛰지 않고 에러로 막는다. 샘플러는 더 이상 chars.txt 를 쓰지 않지만
+      (docs/DATA_LIMITATIONS.md D2) 이 알파벳 경로는 계속 쓴다.
+    """
     seen = set()
     for name in ("korean_lines.txt", "chars.txt"):
         fp = CORPUS / name
-        if fp.exists():
-            seen |= set(fp.read_text(encoding="utf-8"))
+        if not fp.exists():
+            raise FileNotFoundError(
+                f"알파벳 구성에 필요한 코퍼스가 없습니다: {fp}\n"
+                "  이 파일이 빠지면 한글 음절 수가 줄어 기존 HTR/VAE 체크포인트와 어긋납니다.")
+        seen |= set(fp.read_text(encoding="utf-8"))
     syl = sorted(c for c in seen if 0xAC00 <= ord(c) <= 0xD7A3)
     return syl
 

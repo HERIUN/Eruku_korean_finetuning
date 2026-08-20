@@ -220,10 +220,6 @@ ds = OnlineSplitFontSquare(
 
 ![텍스트 샘플링 파이프라인](img_text_sampling.png)
 
-> ⚠️ 그림은 2026-08-19 기준이라 `Ko_set(7,305) = 어절 5,196 + chars.txt 낱글자 2,109` 로 그려져
-> 있는데, [D2](DATA_LIMITATIONS.md#d2-charstxt-가-ko-풀에-낱글자로-섞여-들어간다) 수정으로
-> **낱글자 합류 경로가 없어져 지금은 Ko_set = 5,196** 이다. 나머지 흐름은 그대로다.
->
 > 그림의 sampler 파라미터(`len_words=1,8` / `1,12`, `max_chars=40` / `130`)와 예시 텍스트·이미지는
 > `finetune_runs/eruku_short_fullmse` 실행(seed 15042) 기준이다. 어절 수 범위는 Phase 별로 다르고
 > `--style-words` / `--gen-words` 로 바뀐다(§8-2). `max_chars` 는 하드코딩
