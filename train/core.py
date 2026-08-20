@@ -25,7 +25,7 @@ sys.path.insert(0, str(HERE))
 
 from custom_datasets.korean.handb import HanDBKoreanDataset, handb_collate
 from custom_datasets.korean import fontset as G
-from train import config as _config
+from configs import loader as _config
 
 from models.eruku import Emuru
 
@@ -33,7 +33,7 @@ from models.eruku import Emuru
 def make_parser():
     """Phase 1/2 가 공유하는 전체 인자.
 
-    기본값은 **configs/*.yaml** 에서 온다(train/config.py). CLI 는 그 위를 덮어쓴다.
+    기본값은 **configs/*.yaml** 에서 온다(configs/loader.py). CLI 는 그 위를 덮어쓴다.
     여기 default 는 config 없이 직접 호출할 때의 최종 fallback 이다."""
     p = argparse.ArgumentParser()
     p.add_argument("--config", default=None,

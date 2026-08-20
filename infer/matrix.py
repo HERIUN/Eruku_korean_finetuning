@@ -22,6 +22,8 @@ import torch
 
 HERE = Path(__file__).resolve().parents[1]   # 저장소 루트
 sys.path.insert(0, str(HERE))
+
+from configs import loader as _cfgloader
 from infer.show import load_model, load_style, gen_arr, cell, label_img
 
 # 내장 다양 gen_text 코퍼스 (짧은/긴, 한/영/숫자/부호/혼합 골고루)
@@ -50,9 +52,11 @@ def main():
     ap.add_argument("--cell-w", type=int, default=340)
     ap.add_argument("--cell-h", type=int, default=72)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    ap.add_argument("--no-style-text", action="store_true",
+    ap.add_argument("--no-style-text", action=argparse.BooleanOptionalAction, default=False,
                     help="style_text 를 빈 문자열로 (style 이미지만으로 생성). echo 열도 gen 만 style 텍스트")
-    args = ap.parse_args()
+    ap.add_argument("--config", default=str(HERE / "configs/infer.yaml"),
+                    help="설정 yaml. 우선순위 CLI > yaml > 코드 기본값 (configs/README.md)")
+    args = _cfgloader.parse_args(ap, default_config=str(HERE / "configs/infer.yaml"), scopes=('common', 'matrix'))
     device = torch.device(args.device)
     CW, CH = args.cell_w, args.cell_h
 

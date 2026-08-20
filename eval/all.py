@@ -13,6 +13,8 @@ import argparse, subprocess, sys, re
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parents[1]   # 저장소 루트
+sys.path.insert(0, str(HERE))
+from configs import loader as _cfgloader
 
 
 def run_one(label, ckpt, n, english, kind, coherent=False, fonts_dir=None, max_words=15):
@@ -48,13 +50,15 @@ def main():
     ap.add_argument("--models", nargs="+", required=True, help="label=ckpt 형식들")
     ap.add_argument("--n", type=int, default=100)
     ap.add_argument("--langs", nargs="+", default=["en", "ko"])
-    ap.add_argument("--coherent", action="store_true", help="실제 문장 세그먼트로 평가(신뢰성↑)")
+    ap.add_argument("--coherent", action=argparse.BooleanOptionalAction, default=False, help="실제 문장 세그먼트로 평가(신뢰성↑)")
     ap.add_argument("--max-words", type=int, default=15, help="문장 최대 어절수(올리면 긴 문장 테스트)")
     ap.add_argument("--fonts-dir-ko", default=str(HERE / "assets/fonts_korean_v2/train"),
                     help="한글 style 폰트 디렉토리(일반화 보려면 fonts_korean_v2/test)")
     ap.add_argument("--fonts-dir-en", default=str(HERE / "assets/fonts_english"),
                     help="영어 style 폰트 디렉토리")
-    args = ap.parse_args()
+    ap.add_argument("--config", default=str(HERE / "configs/eval.yaml"),
+                    help="설정 yaml. 우선순위 CLI > yaml > 코드 기본값 (configs/README.md)")
+    args = _cfgloader.parse_args(ap, default_config=str(HERE / "configs/eval.yaml"), scopes=('all',))
     models = [(m.split("=", 1)[0], m.split("=", 1)[1]) for m in args.models]
 
     rows = {}

@@ -32,7 +32,7 @@ import yaml
 # data.sampler 만 argparse dest 가 아니라 dict 통째로 데이터 계층에 전달된다.
 SAMPLER_KEY = "sampler"
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
+REPO_ROOT = Path(__file__).resolve().parents[1]   # configs/ 의 부모 = 저장소 루트
 
 # yaml 에는 `assets/fonts_english` 처럼 짧게 적고, 여기서 저장소 루트 기준 절대경로로 편다.
 # (cwd 가 어디든 같은 곳을 가리키게. 이미 절대경로면 그대로 둔다.)
@@ -41,6 +41,8 @@ PATH_KEYS = frozenset({
     "korean_fonts_dir", "backgrounds_dir",
     "corpus_korean", "corpus_chars", "corpus_english",
     "lines_json", "resume", "ocr_checkpoint",
+    # eval / infer
+    "fonts_dir", "fonts_dir_ko", "fonts_dir_en", "htr_checkpoint", "style_image", "out",
     # eruku_pretrained / vae_checkpoint 는 제외 — HF repo id 도 받으므로 경로로 펴면 안 된다
 })
 
@@ -65,17 +67,27 @@ def _deep_merge(base: dict, over: dict) -> dict:
     return out
 
 
-def flatten(cfg: dict) -> tuple[dict, dict | None]:
-    """섹션 dict → (argparse dest 평면 dict, sampler dict). 섹션 이름은 버린다."""
+def flatten(cfg: dict, scopes=None) -> tuple[dict, dict | None]:
+    """섹션 dict → (argparse dest 평면 dict, sampler dict).
+
+    scopes=None  : 모든 섹션을 합친다. 섹션은 순전히 사람이 읽기 위한 그룹(학습 config).
+    scopes=(...) : **그 섹션들만**, **주어진 순서대로** 쓴다(뒤가 앞을 덮어씀). 스크립트마다
+                   인자 집합이 다른 eval/infer 에서, 한 파일에 공통(common) + 스크립트별
+                   섹션을 두고 골라 쓰기 위한 것. 예: ("common", "echo") 면 echo 가 common 을 덮는다.
+    """
     flat, sampler = {}, None
-    for section, body in cfg.items():
+    items = ([(s, cfg[s]) for s in scopes if s in cfg] if scopes is not None
+             else list(cfg.items()))
+    for section, body in items:
         if not isinstance(body, dict):
             raise ValueError(f"config 최상위 '{section}' 은 섹션(dict)이어야 한다 (값: {body!r})")
         for k, v in body.items():
             if k == SAMPLER_KEY:
                 sampler = v
                 continue
-            if k in flat:
+            if k in flat and scopes is None:
+                # 학습 config 는 섹션이 순전히 장식이라 같은 키가 두 번 나오면 실수다.
+                # scopes 를 준 경우는 의도된 덮어쓰기(뒤 섹션 우선)이므로 허용.
                 raise ValueError(f"config 키 중복: '{k}' (섹션 여러 곳에 존재)")
             flat[k] = _abs_path(v) if k in PATH_KEYS else v
     return flat, sampler
@@ -89,15 +101,19 @@ def _abs_path(v):
     return v if p.is_absolute() else str(REPO_ROOT / p)
 
 
-def parse_args(parser: argparse.ArgumentParser, argv=None, default_config=None):
-    """config 를 반영해 파싱한다. `args.sampler` / `args.config_path` 가 붙는다."""
+def parse_args(parser: argparse.ArgumentParser, argv=None, default_config=None, scopes=None):
+    """config 를 반영해 파싱한다. `args.sampler` / `args.config_path` 가 붙는다.
+
+    scopes: eval/infer 처럼 한 config 를 여러 스크립트가 나눠 쓸 때 읽을 섹션들
+            (예: ("common", "cer")). None 이면 전 섹션.
+    """
     pre = argparse.ArgumentParser(add_help=False)
     pre.add_argument("--config", default=default_config)
     known, _ = pre.parse_known_args(argv)
 
     sampler = None
     if known.config:
-        flat, sampler = flatten(load_config(known.config))
+        flat, sampler = flatten(load_config(known.config), scopes=scopes)
         valid = {a.dest for a in parser._actions}
         unknown = sorted(set(flat) - valid)
         if unknown:
@@ -106,6 +122,10 @@ def parse_args(parser: argparse.ArgumentParser, argv=None, default_config=None):
                 f"  (CLI 인자 이름과 같아야 한다. 예: --style-words → style_words)\n"
                 f"  사용 가능: {sorted(valid - {'help'})}")
         parser.set_defaults(**flat)
+        # config 가 값을 주면 required 인자도 CLI 에서 생략할 수 있어야 한다
+        for a in parser._actions:
+            if a.dest in flat and getattr(a, "required", False):
+                a.required = False
 
     args = parser.parse_args(argv)
     args.sampler = sampler

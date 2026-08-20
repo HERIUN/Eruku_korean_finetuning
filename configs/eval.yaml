@@ -1,0 +1,46 @@
+# 평가 스크립트 공통 설정
+#
+# eval/ 스크립트들은 인자 집합이 서로 조금씩 달라서, `common:` 에 공통값을 두고
+# 스크립트별 섹션(cer / htr_cer / echo)에 그 스크립트에만 있는 것을 둔다.
+# 각 스크립트는 자기 섹션 + common 만 읽는다. 우선순위는 여전히 CLI > yaml > 코드 기본값.
+#
+#   ./eval.sh cer --ckpt <ckpt>                      # 이 파일이 기본으로 적용됨
+#   ./eval.sh cer --ckpt <ckpt> --n 200 --cfg 1.5    # 일부만 CLI 로
+#   ./eval.sh cer --ckpt <ckpt> --config configs/my_eval.yaml
+
+common:
+  n: 100                 # 생성·측정할 샘플 수
+  cfg: 1.0               # classifier-free guidance scale (1.0 = CFG 미사용)
+  max_new_tokens: 480    # 생성 디코딩 상한 (긴 문장이 잘리면 키운다)
+  max_words: 15          # 평가 텍스트 어절수 상한
+  seed: 0
+  english: false         # true 면 영어 텍스트/라틴 폰트로 평가
+  coherent: false        # 실제 문장 세그먼트로 평가할지. **권장은 true** — 랜덤 단어 나열보다
+                         # OCR 신뢰성이 높다(docs/EXPERIMENTS.md 수치는 전부 coherent 기준).
+                         # 기존 측정과의 비교 가능성 때문에 기본값은 false 로 둔다.
+                         # 부울은 --coherent / --no-coherent 로 CLI 에서 양방향 조절 가능.
+  no_style_text: false   # style 텍스트를 비우고 이미지만 조건으로 (p_drop 학습 확인용)
+  fonts_dir: assets/fonts_korean_v2/train   # 평가용 폰트. held-out 은 fonts_korean_v2/test
+  device: cuda
+
+cer:                     # eval/cer.py — easyocr echo CER (한글은 saturated, 교차검증용)
+  vae_checkpoint: null   # 한글 적응 VAE 로 교체 평가 (주면 ckpt 의 vae.* 를 strip)
+  ocr_gpu: false         # OCR 을 GPU 로 (기본 CPU — 학습과 GPU 경합 회피)
+  out: finetune_runs/cer.txt
+
+htr_cer:                 # eval/htr_cer.py — 한글 HTR 리더 CER ← 한글 주 지표
+  vae_checkpoint: null
+  htr_checkpoint: finetune_runs/aux_htr_ko/htr_s20000
+  out: finetune_runs/htr_cer.txt
+
+echo:                    # eval/echo_metrics.py — echo(스타일 재현) 정량
+  max_new_tokens: 320    # common 값을 덮어씀 (echo 는 짧은 문장)
+  out: finetune_runs/echo.txt
+
+all:                     # eval/all.py — 여러 모델 × ko/en 배터리 (인자 집합이 달라 common 미사용)
+  n: 100
+  coherent: false
+  max_words: 15
+  langs: [en, ko]
+  fonts_dir_ko: assets/fonts_korean_v2/train
+  fonts_dir_en: assets/fonts_english

@@ -25,6 +25,8 @@ from fontTools.ttLib import TTFont
 
 HERE = Path(__file__).resolve().parents[1]   # 저장소 루트
 sys.path.insert(0, str(HERE))
+
+from configs import loader as _cfgloader
 from infer.show import load_model, render_in_font, style_tensor, gen_from_style
 
 
@@ -107,12 +109,14 @@ def main():
     ap.add_argument("--max-new-tokens", type=int, default=320)
     ap.add_argument("--max-words", type=int, default=15, help="문장 최대 어절수(1~max, 올리면 긴 문장 robustness)")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--no-style-text", action="store_true")
-    ap.add_argument("--english", action="store_true", help="영어 전용 텍스트로 평가(pretrained 공정비교용)")
-    ap.add_argument("--coherent", action="store_true", help="랜덤단어 대신 실제 문장 세그먼트(OCR 신뢰성↑)")
+    ap.add_argument("--no-style-text", action=argparse.BooleanOptionalAction, default=False)
+    ap.add_argument("--english", action=argparse.BooleanOptionalAction, default=False, help="영어 전용 텍스트로 평가(pretrained 공정비교용)")
+    ap.add_argument("--coherent", action=argparse.BooleanOptionalAction, default=False, help="랜덤단어 대신 실제 문장 세그먼트(OCR 신뢰성↑)")
     ap.add_argument("--out", default=str(HERE / "finetune_runs" / "echo_metrics.txt"))
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    args = ap.parse_args()
+    ap.add_argument("--config", default=str(HERE / "configs/eval.yaml"),
+                    help="설정 yaml. 우선순위 CLI > yaml > 코드 기본값 (configs/README.md)")
+    args = _cfgloader.parse_args(ap, default_config=str(HERE / "configs/eval.yaml"), scopes=('common', 'echo'))
     device = torch.device(args.device)
     rng = random.Random(args.seed)
 

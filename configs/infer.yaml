@@ -1,0 +1,45 @@
+# 추론·시각화 스크립트 공통 설정
+#
+# eval.yaml 과 같은 구조 — `common:` + 스크립트별 섹션(show / matrix / release).
+# 각 스크립트는 common + 자기 섹션만 읽고, 뒤 섹션이 common 을 덮는다.
+#
+#   ./inference.sh show --ckpt <ckpt>                  # 이 파일이 기본
+#   ./inference.sh show --ckpt <ckpt> --cfgs 1.0 2.0   # 일부만 CLI 로
+
+common:
+  lines_json: data/ref_set/train_lines.json   # style 참조 이미지 세트
+  n_writers: 4              # 몇 명(폰트)의 스타일을 보여줄지
+  max_new_tokens: 220       # 생성 디코딩 상한
+  seed: 0
+  cell_w: 340               # 결과 그리드 셀 크기(px)
+  cell_h: 72
+  device: cuda
+
+show:                       # infer/show.py — [스타일ref | 정답 | 생성 cfg…] 뷰어
+  out: _debug/show.png
+  seed_text: 한국어 OCR 2024
+  row_texts: null           # 행마다 다른 텍스트(미지정 시 seed_text 반복)
+  echo_style: false         # style 이미지와 같은 텍스트를 생성(= echo 확인)
+  cfgs: [1.0, 1.5, 2.0]     # 열마다 다른 guidance scale
+  no_style_text: false
+  vae_checkpoint: null      # 한글 적응 VAE 로 교체해서 보기
+  exclude_writers: [UlsanJunggu]   # 글리프가 깨진 폰트 제외 ('델' malformed)
+
+matrix:                     # infer/matrix.py — 스타일 × 텍스트 매트릭스
+  out: _debug/matrix.png
+  gen_texts: null           # 열에 쓸 텍스트들(미지정 시 기본 세트)
+  cfg: 1.0
+  n_writers: 5
+  seed: 42
+  no_style_text: false
+
+release:                    # infer/release.py — 발행된 HF 릴리즈로 생성(로컬 ckpt 불필요)
+  repo: HERIUN/eruku_korean
+  out: _debug/release_show.png
+  style_image: null         # 직접 찍은 손글씨 1장으로 스타일 지정
+  style_text: ''            # 그 이미지에 적힌 텍스트
+  seed_text: 오늘 날씨가 좋아서 친구와 공원에서 커피를 마셨다 2024년
+  cfgs: [1.0, 1.5]
+  max_new_tokens: 480
+  bbox_crop: false
+  exclude_writers: [UlsanJunggu]

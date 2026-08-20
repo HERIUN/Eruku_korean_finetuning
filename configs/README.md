@@ -6,10 +6,13 @@ CLI 인자만 있으면 "무엇을 조절할 수 있는지"가 스크립트 여�
 
 | 파일 | 무엇 |
 |---|---|
-| [`base.yaml`](base.yaml) | **전체 파라미터 인벤토리 + 기본값**. 새 항목은 여기 먼저 추가 |
+| [`base.yaml`](base.yaml) | **학습 전체 파라미터 인벤토리 + 기본값**. 새 항목은 여기 먼저 추가 |
 | [`phase1.yaml`](phase1.yaml) | 논문 Phase 1 — 짧은 2~3어절로 glyph 학습 (65000 step) |
 | [`phase2.yaml`](phase2.yaml) | 논문 Phase 2 — Phase 1 에서 resume, 긴 줄 +5000 step |
 | [`korean_from_en.yaml`](korean_from_en.yaml) | 영어 pretrained → 바로 한글 (Phase 1 생략, 실사용) |
+| [`eval.yaml`](eval.yaml) | 평가 — `common:` + 스크립트별 `cer` / `htr_cer` / `echo` / `all` |
+| [`infer.yaml`](infer.yaml) | 추론·시각화 — `common:` + `show` / `matrix` / `release` |
+| [`loader.py`](loader.py) | 로더 (`_base_` 상속, CLI 덮어쓰기, 오타 키 거부, 경로 정규화) |
 
 ## 우선순위
 
@@ -50,6 +53,25 @@ data:
 
 경로 값(`corpus_korean`, `korean_fonts_dir`, `resume`, `eruku_pretrained` …)은 상대로 적어도
 저장소 루트 기준 절대경로로 펴진다 → cwd 와 무관하게 같은 곳을 가리킨다.
+
+## eval / infer — 섹션 고르기(scopes)
+
+학습은 스크립트가 인자를 전부 공유하지만, eval/infer 는 스크립트마다 인자 집합이 다르다
+(`--ocr-gpu` 는 `cer` 에만, `--htr-checkpoint` 는 `htr_cer` 에만). 그래서 한 파일에
+공통 `common:` + 스크립트별 섹션을 두고, 각 스크립트가 **자기 섹션만 골라 읽는다**.
+
+```python
+# eval/cer.py
+args = _cfgloader.parse_args(ap, default_config=".../configs/eval.yaml",
+                             scopes=("common", "cer"))   # 뒤 섹션이 앞을 덮는다
+```
+
+`scopes` 를 준 경우에만 같은 키의 덮어쓰기가 허용된다(예: `echo` 섹션의 `max_new_tokens: 320`
+가 `common` 의 480 을 덮음). 학습 config 처럼 `scopes` 가 없으면 섹션은 장식일 뿐이고
+키 중복은 실수로 보아 **에러**다.
+
+**부울 인자**는 `--coherent` / `--no-coherent` 처럼 양방향이다
+(`argparse.BooleanOptionalAction`). yaml 에서 `true` 로 켜 두어도 CLI 에서 끌 수 있다.
 
 ## 새 파라미터 추가하기
 

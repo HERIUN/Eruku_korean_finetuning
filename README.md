@@ -298,12 +298,14 @@ train.sh                   # 학습·데이터: best|en2ko|phase1|phase2|vae|htr
 inference.sh               # 생성·시각화·릴리즈: best|hf|show|matrix|echo|refset|release
 eval.sh                    # 평가·감사·실험: best|cer|easyocr|echo|all|fonts|exp
 # 설정  (데이터 합성 ~ 학습 파라미터 전부, CLI > yaml > 코드 기본값)
-configs/base.yaml          # ★ 조절 가능한 전체 항목 + 기본값 (주석 포함, 여기부터 보면 됨)
+configs/base.yaml          # ★ 학습 전체 항목 + 기본값 (주석 포함, 여기부터 보면 됨)
 configs/phase1.yaml        # 논문 Phase 1 레시피 / phase2.yaml / korean_from_en.yaml
-configs/README.md          # 우선순위·상속·새 인자 추가법
+configs/eval.yaml          # 평가 (common + cer/htr_cer/echo/all 섹션)
+configs/infer.yaml         # 추론·시각화 (common + show/matrix/release 섹션)
+configs/loader.py          # yaml 로더 (_base_ 상속, CLI 덮어쓰기, 오타 키 거부)
+configs/README.md          # 우선순위·상속·섹션(scopes)·새 인자 추가법
 # 학습
 train/core.py              # 학습 공통 코어 (make_parser 인자 정의 + 학습 루프)
-train/config.py            # yaml 로더 (_base_ 상속, CLI 덮어쓰기, 오타 키 거부)
 train/phase1.py            # Phase 1 진입점 = configs/phase1.yaml 을 무는 얇은 래퍼
 train/phase2.py            # Phase 2 진입점 (긴 줄, resume, +5000 step)
 train/korean_from_en.py    # 영어 pretrained → 한글 직접 (Phase 1 생략)

@@ -23,6 +23,8 @@ from PIL import Image
 
 HERE = Path(__file__).resolve().parents[1]   # 저장소 루트
 sys.path.insert(0, str(HERE))
+
+from configs import loader as _cfgloader
 # remote code 로더는 HF_MODULES_CACHE 아래로 모듈을 복사해 import 한다. 기본 경로가
 # 다른 사용자 소유면 PermissionError 가 나므로 transformers import 전에 고정한다.
 os.environ.setdefault("HF_MODULES_CACHE", f"/tmp/hf_modules_{os.getuid()}")
@@ -54,7 +56,7 @@ def main():
     ap.add_argument("--cfgs", nargs="+", type=float, default=[1.0, 1.5])
     ap.add_argument("--n-writers", type=int, default=4)
     ap.add_argument("--max-new-tokens", type=int, default=480)
-    ap.add_argument("--bbox-crop", action="store_true",
+    ap.add_argument("--bbox-crop", action=argparse.BooleanOptionalAction, default=False,
                     help="style 이미지를 잉크 bbox 로 크롭(실제 스캔 손글씨의 여백 제거). 폰트 렌더엔 불필요")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--cell-w", type=int, default=340)
@@ -62,7 +64,9 @@ def main():
     ap.add_argument("--exclude-writers", nargs="*", default=["UlsanJunggu"])
     ap.add_argument("--out", default="_debug/release_show.png")
     ap.add_argument("--device", default="cuda")
-    args = ap.parse_args()
+    ap.add_argument("--config", default=str(HERE / "configs/infer.yaml"),
+                    help="설정 yaml. 우선순위 CLI > yaml > 코드 기본값 (configs/README.md)")
+    args = _cfgloader.parse_args(ap, default_config=str(HERE / "configs/infer.yaml"), scopes=('common', 'release'))
 
     model = load_release(args.repo, args.device)
     CW, CH = args.cell_w, args.cell_h

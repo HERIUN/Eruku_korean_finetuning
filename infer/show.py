@@ -20,6 +20,8 @@ from torchvision import transforms as T
 
 HERE = Path(__file__).resolve().parents[1]   # 저장소 루트
 sys.path.insert(0, str(HERE))
+
+from configs import loader as _cfgloader
 from models.eruku import Emuru
 
 GOTHIC = str(HERE / "assets" / "fonts_label" / "NanumGothic-Regular.ttf")
@@ -226,7 +228,7 @@ def main():
     ap.add_argument("--row-texts", nargs="+", default=None,
                     help="행마다 다른 목표 텍스트. 주면 writer 행 i 는 row_texts[i %% len] 사용 "
                          "(폰트+텍스트 동시 다양화). 안 주면 모든 행에 --seed-text 적용")
-    ap.add_argument("--echo-style", action="store_true",
+    ap.add_argument("--echo-style", action=argparse.BooleanOptionalAction, default=False,
                     help="각 행의 목표 텍스트를 그 행 style ref 의 텍스트와 동일하게 설정. "
                          "style_text == target → 모델이 '본 글자'를 그대로 재현하는지 확인용. "
                          "(--row-texts/--seed-text 보다 우선)")
@@ -251,13 +253,15 @@ def main():
                     help="montage 각 칸(셀)의 세로 픽셀. 한 줄 라인 이미지 높이에 맞춤 "
                          "(시각화 전용, 모델 입출력 해상도와 무관)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    ap.add_argument("--no-style-text", action="store_true",
+    ap.add_argument("--no-style-text", action=argparse.BooleanOptionalAction, default=False,
                     help="style_text(ref 전사)를 주지 않고 빈 문자열로 생성 (style 이미지만으로 "
                          "스타일 파악). 줬을 때와 비교용. 컬럼 라벨에 (no-stext) 표시")
     ap.add_argument("--exclude-writers", nargs="*", default=["UlsanJunggu"],
                     help="montage writer(폰트) 후보에서 제외할 key. 기본: 깨진 글리프('델') 폰트 "
                          "UlsanJunggu (font_audit 참고). '#N' 접미사는 자동 무시하고 base 이름으로 비교.")
-    args = ap.parse_args()
+    ap.add_argument("--config", default=str(HERE / "configs/infer.yaml"),
+                    help="설정 yaml. 우선순위 CLI > yaml > 코드 기본값 (configs/README.md)")
+    args = _cfgloader.parse_args(ap, default_config=str(HERE / "configs/infer.yaml"), scopes=('common', 'show'))
     device = torch.device(args.device)
     CW, CH = args.cell_w, args.cell_h
 
