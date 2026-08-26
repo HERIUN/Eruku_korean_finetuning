@@ -186,6 +186,10 @@ uv run python custom_datasets/korean/split.py --n 8 --out /tmp/ksplit   # 샘플
   - 재현: `PYTHONPATH=. uv run python docs/_verify_style_len.py` (사용률 ~100% 확인)
 - **`docs/JONGSEONG_STROKE_LOSS.md`** — ⚠️ **종성(받침) 획 손실 진단·개선 로그 (진행 중)**.
   겹받침 음절정확도가 홑받침보다 22%p 낮은 원인을 VAE/T5 로 분해한 측정과 통제 실험 기록.
+- **`docs/FONT_SOURCES.md`** — 🔤 **폰트 소스·수집 절차**. Google Fonts / 눈누(noonnu) / 온글잎(ownglyph)
+  각각의 목록 확보 경로·폰트 파일 취득 방식·라이선스 메타 수집, 이름+글리프해시 2단 중복제거,
+  품질 감사 실측표. ⚠️ 온글잎 Firestore 는 개인정보를 포함하므로 `mask.fieldPaths` 필수.
+  2026-08 수집분 신규 2,020종은 `assets/fonts_korean_new/`(staging, git 제외, **학습 미투입**).
 
 ## 추론 파라미터: CFG · drop_text · style_text (중요)
 
@@ -319,7 +323,8 @@ custom_datasets/korean/aux.py     # HTR 학습용 (라인이미지, 전사) 데�
 custom_datasets/upstream/  # 원본 repo 코드 vendored (수정 금지 — upstream/README.md 참고)
 custom_datasets/korean/    # 이 repo 추가분 (upstream 을 import, 역방향 없음)
 custom_datasets/hw_line_sample/    # 실제 손글씨 라인 20장 + label.txt (미러링/복원 평가용)
-tools/                     # font_audit(폰트 품질 감사) · fetch_aux · hf_upload(HF 릴리즈)
+tools/                     # font_audit(폰트 품질 감사) · font_charset(실렌더 charset 생성)
+                           #   · fetch_aux · hf_upload(HF 릴리즈)
 # 추론 / 평가  (infer/show.py 가 공유 라이브러리: load_model/gen_arr/render_in_font …)
 infer/release.py           # 발행된 HF 릴리즈(공개 API)로 생성 — 로컬 ckpt 불필요
 infer/show.py              # 자기설명적 결과 뷰어 [스타일ref|정답|생성 cfg…] (--exclude-writers 로 폰트 제외)
@@ -336,7 +341,9 @@ experiments/               # 일회성 실험 스크립트 (vae_* / gen_* / jong
 docs/                      # 상세 문서 + 재현 스크립트·이미지
 assets/                    # fonts_korean_v2(train 83 / test 16) · fonts_english(177) ·
                            #   custom_hw_fonts(held-out 4) · backgrounds · corpus · korean_charset.json
-                           #   + download_script/(Google Fonts 수집) · font_view/(폰트 오버뷰)
+                           #   + download_script/(Google Fonts · noonnu · ownglyph 수집)
+                           #   + font_view/(폰트 오버뷰)
+                           #   fonts_korean_new/ 는 수집 staging (git 제외, 학습 미투입)
 ```
 
 ### 폰트 오버뷰 (어떤 글씨체인지 한눈에 보기)
@@ -348,6 +355,35 @@ uv run python assets/font_view/render_overview.py --dirs assets/fonts_korean_v2/
 
 폴더별 montage PNG 생성: 행마다 [파일이름 + 지원 글자수 분류(전체/한글/한자/영문/숫자/기호/기타) |
 샘플 1줄 렌더(한글+영어 대/소문자+숫자+특수기호)]. 폰트 추가/교체 후 다시 실행하면 갱신됨.
+
+### 폰트 새로 수집하기
+
+writer 다양성이 최대 한계라([결과 요약](#결과-요약)) 폰트 확보가 곧 writer 확보다.
+소스별 취득 경로·라이선스·개인정보 주의사항은 [`docs/FONT_SOURCES.md`](docs/FONT_SOURCES.md) 에 있다.
+
+```bash
+# 1) 수집 — Google Fonts / 눈누(noonnu) / 온글잎(ownglyph)
+.venv/bin/python assets/download_script/tools_fetch_gf.py   --lang ko
+.venv/bin/python assets/download_script/tools_fetch_free.py --src noonnu --workers 6 --sleep 0.5
+.venv/bin/python assets/download_script/tools_fetch_free.py --src ownglyph --n 1000
+
+# 2) 게이트 — 커버리지·공백·ASCII·기하 이상 판정 (--move 로 _partial/·_rejected/ 로 분리)
+.venv/bin/python tools/font_pool_audit.py --fonts-dir assets/fonts_korean_new/noonnu --move
+
+# 3) charset — cmap 이 아니라 **실제 렌더** 기준으로 생성 (빈 글리프·두부 제외)
+.venv/bin/python tools/font_charset.py --fonts-dir assets/fonts_korean_new/noonnu --force
+```
+
+수집기는 기존 보유분(`fonts_korean_v2` · `custom_hw_fonts` · `fonts_english`)과 **이름 정규화 +
+글리프 아웃라인 해시** 2단으로 중복을 제거한다. 눈누는 페이지의 webfont(woff2)를 받아 sfnt 로
+재컴파일하므로 **폰트당 ~3초 CPU** 이고 프로세스 풀로 돈다(스레드는 GIL 때문에 무의미).
+눈누는 동시 요청에 민감해 **워커 6 이하**를 쓸 것(16워커에서 페이지 요청 22% 실패).
+
+⚠️ 온글잎 목록 API(공개 Firestore)에는 폰트 주인의 이메일·전화번호·생년월일이 들어 있다.
+수집기는 `mask.fieldPaths` 로 폰트 필드만 요청해 **개인정보를 받지도 저장하지도 않는다.**
+
+⚠️ 수집 = 사용 허가가 아니다. 라이선스 요약표를 폰트별로 `_catalog_noonnu.json` 에 함께 저장하니
+학습 투입 전에 확인할 것.
 
 ## 결과 요약
 

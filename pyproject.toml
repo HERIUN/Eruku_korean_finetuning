@@ -13,6 +13,7 @@ dependencies = [
     "opencv-python-headless>=4.10",
     "pillow>=10",
     "fonttools>=4.50",
+    "brotli>=1.1",
     "msgpack>=1.0",
     "nltk>=3.9",
     "tqdm>=4.66",

@@ -30,7 +30,7 @@ ASSETS = HERE.parent
 LABEL_FONT = ASSETS / "fonts_label" / "NanumGothic-Regular.ttf"
 
 # 한 줄에 한글 + 영어 대/소문자 + 숫자 + 특수기호 모두 포함
-SAMPLE = "다람쥐 헌 쳇바퀴 Quick Fox 0123 ?!@#%"
+SAMPLE = "다람쥐 헌 쳇바퀴 Quick Fox 0123 ?!@#%&*+=~/\\|.,·:;'\"()[]{}<>…₩"
 
 DEFAULT_DIRS = [
     ASSETS / "fonts_korean_v2" / "train",
@@ -129,8 +129,8 @@ def render_row(fp: Path, label_font, label_small) -> Image.Image:
     try:
         f = ImageFont.truetype(str(fp), FONT_SIZE)
         w = d.textlength(SAMPLE, font=f)
-        if w > SAMPLE_W - 2 * PAD:
-            f = ImageFont.truetype(str(fp), max(16, int(FONT_SIZE * (SAMPLE_W - 2 * PAD) / w)))
+        if w > SAMPLE_W - 4 * PAD:      # 마지막 글자가 잘리지 않게 여유
+            f = ImageFont.truetype(str(fp), max(16, int(FONT_SIZE * (SAMPLE_W - 4 * PAD) / w)))
         d.text((NAME_W + PAD, ROW_H // 2), SAMPLE, font=f, fill="black", anchor="lm")
     except Exception as e:
         d.text((NAME_W + PAD, ROW_H // 2), f"[로드 실패: {type(e).__name__}]",

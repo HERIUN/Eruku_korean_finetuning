@@ -17,6 +17,7 @@ _val/
 # 코퍼스 백업 / 폰트 staging(중간 산출) — 커밋 안 함
 assets/corpus/*.bak_*
 assets/fonts_korean_gf_new/
+assets/fonts_korean_new/
 
 # tps 빌드 산출물
 custom_datasets/font_square/tps/build/
