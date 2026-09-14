@@ -43,6 +43,8 @@ PATH_KEYS = frozenset({
     "lines_json", "resume", "ocr_checkpoint",
     # eval / infer
     "fonts_dir", "fonts_dir_ko", "fonts_dir_en", "htr_checkpoint", "style_image", "out",
+    # inkspire
+    "empty_cache", "lora_dir", "layout_ckpt", "std_font",
     # eruku_pretrained / vae_checkpoint 는 제외 — HF repo id 도 받으므로 경로로 펴면 안 된다
 })
 

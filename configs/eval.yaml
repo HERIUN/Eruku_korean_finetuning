@@ -33,6 +33,8 @@ cer:                     # eval/cer.py — easyocr echo CER (한글은 saturated
 
 htr_cer:                 # eval/htr_cer.py — 한글 HTR 리더 CER ← 한글 주 지표
   vae_checkpoint: null
+  style_ref_text: null   # style ref 텍스트(one-shot). null = echo(style = 목표 텍스트 렌더). InkSpire 비교 시
+                         #   "다람쥐 헌 쳇바퀴에 타고파" 로도 측정 (docs/EXPERIMENTS.md §12)
   htr_checkpoint: finetune_runs/aux_htr_ko/htr_s20000
   out: finetune_runs/htr_cer.txt
 

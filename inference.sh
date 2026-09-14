@@ -9,6 +9,8 @@
 #   ./inference.sh echo   [args...]       echo(style==gen) 모델 나란히 비교
 #   ./inference.sh refset [args...]       style ref 세트 생성 (없으면 위 뷰어가 못 돈다)
 #   ./inference.sh release vae|model [..] HuggingFace 발행 (기본 dry-run, --push 로 실제 업로드)
+#   ./inference.sh inkspire [args...]     InkSpire one-shot 뷰어 [스타일ref | 정답 | InkSpire 여러 줄]
+#                                         (--lora-dir, --layout-ckpt 없으면 std layout, --dry-run 은 캔버스만)
 #
 # 뒤에 붙인 인자는 그대로 넘어간다:  ./inference.sh show --ckpt <ckpt> --cfgs 1.0 2.0
 # 각 하위 명령의 전체 인자는 `--help` 로:  ./inference.sh show --help
@@ -71,6 +73,7 @@ case "$cmd" in
   echo)    run "$PY" infer/echo_compare.py "$@" ;;
   refset)  run "$PY" custom_datasets/korean/fontset.py "$@" ;;
   release) run "$PY" tools/hf_upload.py "$@" ;;
+  inkspire) run "$PY" infer/inkspire.py "$@" ;;
   ""|-h|--help|help) usage ;;
   *) echo "알 수 없는 명령: $cmd" >&2; echo >&2; usage >&2; exit 1 ;;
 esac

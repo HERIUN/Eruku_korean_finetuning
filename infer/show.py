@@ -134,6 +134,10 @@ def gen_from_style(model, style_img, style_text, gen_text, cfg, max_new, device,
     같은 style 로 여러 텍스트를 생성할 땐 이 함수 대신 decoder embeds 를 재사용할 것
     (infer.show/infer.matrix 의 main 참고 — 여긴 매 호출 VAE encode 를 다시 한다).
     """
+    if hasattr(model, "gen"):   # InkSpire 디스패치(infer/inkspire.py) — cfg/max_new/max_img_len 무시
+        t = style_img[0] if style_img.dim() == 4 else style_img
+        arr = ((t[0].float().cpu().numpy() + 1) * 127.5).clip(0, 255).astype(np.uint8)
+        return model.gen(arr, style_text, gen_text, seed or 0)
     return gen_from_style_batch(model, [style_img], [style_text], [gen_text], cfg, max_new,
                                 device, max_img_len=max_img_len, seed=seed)[0]
 
@@ -186,7 +190,23 @@ def load_model(ckpt, device, vae_checkpoint=None):
     vae_checkpoint 를 주면 그 VAE 로 모델을 만들고, **ckpt 의 옛 vae.\\* 키를 strip** 해서
     새 VAE 가 덮이지 않게 한다(한글 적응 VAE 교체 검증용; ckpt.model 에 옛 vae.* 252키가 있음).
     안 주면 ckpt 의 vae.* 를 그대로 쓴다(발행본이면 config 의 페어 VAE 로 모델을 만든다).
+
+    `inkspire:<lora_dir>[,<layout_ckpt>]` 면 InkSpire 생성기(infer/inkspire.py)를 돌려준다 — eval/htr_cer.py ·
+    experiments/gen_compare.py 가 무수정으로 두 백엔드를 비교한다. 지연 import 라 Eruku 경로엔 FLUX/peft 미탑재.
     """
+    if str(ckpt).startswith("inkspire:"):
+        from infer.inkspire import STD_FONT, InkSpireGen
+        parts = str(ckpt)[len("inkspire:"):].split(",")
+        # 추가 인자는 key=value 로 붙인다: steps, guidance (스윕용)
+        kw = {k: (float(v) if v.replace(".", "", 1).isdigit() else v)
+              for k, v in (x.split("=") for x in parts if "=" in x)}
+        pos = [x for x in parts if "=" not in x]
+        return InkSpireGen(pos[0], pos[1] if len(pos) > 1 and pos[1] else None, device,
+                           steps=int(kw.get("steps", 20)),
+                           guidance=kw.get("guidance", 30.0),
+                           std_font=kw.get("std_font", STD_FONT),
+                           trim_ref=bool(kw.get("trim_ref", 1)),
+                           degrade=kw.get("degrade", 0.0)), "inkspire"
     ck, hf_vae = {}, None
     if Path(ckpt).exists():
         ck = torch.load(ckpt, map_location="cpu", weights_only=False)

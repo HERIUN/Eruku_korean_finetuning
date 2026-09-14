@@ -13,6 +13,11 @@ README 에서 분리한 **측정 기록**이다. 코드에 반영된 결론만 �
 | §5 | Eruku 재적응 (2026-07) | 단문강조 재적응으로 한글 CER 0.211 → 0.127, 단문 0.54 → 0.29 |
 | §6 | VAE 강건성 | 실제 손글씨는 여백이 latent std 를 6~29배로 튀김 → ink bbox 크롭 |
 | §7 | 종성 획 손실 (2026-08) | 겹받침 음절정확도가 홑받침보다 22%p 낮음 (진행 중) |
+| §8 | 폰트 풀 156배 (2026-09) | seen 단문 중앙값 0.133 → **0.000**, 미노출 writer 는 상한 포화로 판정불가 |
+| §9 | 코퍼스 35배 (2026-09) | 자연어 음절 32%→90%. seen 평균 0.084 → **0.069**, **폭주율 1.0% → 0.3%**(VAE 상한과 동률) |
+| §10 | VAE 폰트 156배 (2026-09) | 측정 3중 오류로 결론 보류 → §11 |
+| §11 | **§4 정정** (2026-09) | **HTR loss 를 껐던 게 잘못**. MSE 는 ㅇ↔ㅁ 혼동을 못 본다. HTR 0.3 이 CER 절반·자모교체 −52% |
+| §12 | InkSpire 한글 재현 (2026-09) | FLUX-Fill LoRA + 레이아웃 CFM. Eruku 와 같은 프로토콜로 직접 비교 — **TBD** |
 
 ---
 
@@ -36,6 +41,24 @@ README 에서 분리한 **측정 기록**이다. 코드에 반영된 결론만 �
 측정 방식: **echo(style_text == gen_text)** — 텍스트 T 를 폰트로 깨끗이 렌더한 GT 를 style 로 주고 같은 T 를
 생성, GT 와 비교. n=100 다양 길이(1~15어절), cfg=1.0, seen 폰트. 스크립트 `eval/echo_metrics.py`.
 (↓ 낮을수록 좋음: MSE·LPIPS·FID / ↑ 높을수록: SSIM. **굵게 = 열 최고**)
+
+> **표의 `v2` 가 뭔지** — **데이터 파이프라인 버전**이다. VAE 버전도, `assets/fonts_korean_v2`
+> 디렉토리와도 **무관하다**. `data.legacy_transform` 한 플래그를 가리킨다:
+> `구 transform` = `legacy_transform: true`(원본 composite 증강 — 합쳐 렌더 후 경계분할),
+> `v2` = `legacy_transform: false`(현행 정책 — 흰배경·무휨 렌더).
+>
+> 실체는 `finetune_runs/korean_en2ko_fixed` 다. 설정의 요점만:
+>
+> | 항목 | 값 | 뜻 |
+> |---|---|---|
+> | `resume` | `null` | 이어받기 없음 |
+> | `eruku_pretrained` | `model_zoo/eruku_pretrained/000073688.pth` | **영어 pretrained 에서 바로 시작** |
+> | `vae_checkpoint` | `blowing-up-groundhogs/emuru_vae` | **원본 VAE 동결. 한글 적응 전이다** |
+> | `lr` / `max_steps` | 5e-5 / 20000 | |
+>
+> 즉 `v2` 는 **한글 VAE 적응(§4) 이전** 단계다. 여기서 §3 의 상한을 만나 s11000 에서 정체했고,
+> 그 지점에서 `--reset-vae` 로 한글 VAE 를 붙인 것이 `eruku_readapt_fullvae`(§4) → §5 로 이어진다.
+> 계보 전체는 §13 의 표 참조.
 
 ### 한글 (echo, n=100)
 
@@ -96,7 +119,12 @@ val loss 만 오르고(과적합) 영어가 소폭 퇴보한다. 아무리 더 �
 - (b) **입력 해상도↑** (h=64→96, latent 세로 8→12로 용량↑). 단 `query_emb`/`t5_to_vae` 재init 필요.
 - (c) **한글로 VAE encoder+T5 공동 재학습** — conditioning 정보 상한 자체를 올림. **고위험**(pretrained 강점 재학습).
 
-## 4. VAE 한글 적응 실험 (2026-07) — **full(enc+dec) + HTR off 가 최선**
+## 4. VAE 한글 적응 실험 (2026-07) — ~~full(enc+dec) + HTR off 가 최선~~
+
+> ⚠️ **이 절의 「HTR off」 결론은 2026-09-09 에 반증됐다 → [§11](#11-4-정정--htr-loss-를-껐던-결정이-잘못됐다-2026-09-09).**
+> 판정 지표가 roundtrip MSE 였는데 **MSE 는 ㅇ↔ㅁ 같은 자모 혼동을 못 본다.** 같은 조건에서
+> HTR 0.3 은 MSE 를 62~69% 악화시키지만 **CER 을 절반으로, 자모 교체를 39~52% 줄인다.**
+> 아래 MSE 표는 그대로 유효하나, 그로부터 도출한 레시피(`--htr-weight 0`)는 쓰지 말 것.
 
 위 (a)/(c) 를 실제로 학습해 비교. 파이프라인: 한글 HTR finetune(`train/aux_htr.py`) → VAE finetune(`train/vae_korean.py`) →
 교체 검증(`infer/show.py`/`eval/cer.py --vae-checkpoint`). clean-bw roundtrip MSE(고정 probe, `experiments/vae_recon.py`):
@@ -245,3 +273,474 @@ held-out 폰트가 오히려 약간 더 좋아 폰트 과적합은 아니다.
 
 > 측정 조건 주의: ② 는 종성 유형 표본을 맞추려고 **무작위 음절 나열**(OOD)을 쓴 통제 비교다.
 > 절대 수준은 실제 문장보다 나쁘며, 읽어야 할 것은 **유형 간 상대 차이**다.
+
+
+## 8. 폰트 풀 83종 → 12,951종 (2026-09-02) — seen −37%, 미노출 writer 무승부
+
+§4 의 결론("폰트 다양성 부족이 진짜 레버, 증강·균일빈도로는 오히려 악화")을 실제로 집행했다.
+온글잎 배포가능 폰트 11,989종을 **전량** 수집해 학습 풀을 **83종 → 12,951종(156배)** 으로 키우고,
+§5 의 best 레시피에서 **폰트 디렉토리만** 바꿔 재적응했다.
+
+### 수집·게이트
+
+| | 결과 |
+|---|---|
+| 온글잎 | 배포가능 11,989 전량 조회 → **11,946종 확보** (신규 10,951 + 기존 995, 글리프해시 중복 1,032 제거, 실패 6). 15GB |
+| 눈누 | **소진 확정** — sitemap 1,172 페이지 전부 처리(OK 896 / 기보유 136 / 중복 79 / 저커버 40 / webfont없음 16 / DL실패 5). 재시도해도 5건은 jsdelivr URL 이 죽어 영구 실패 |
+| 게이트 (`tools/font_pool_audit.py`) | 온글잎 11,946 → **OK 11,940 · PARTIAL 2 · REJECT 4**(기하 이상 글리프). 실제 사람 손글씨라 품질이 균일하다 |
+| 최종 풀 | `assets/fonts_korean_v3/train/` **12,951종** = v2/train 83 + 눈누 943 + 온글잎 11,940 − 교집합 훼손 15종 (심볼릭 링크, git 제외) |
+
+**교집합 방어가 핵심이다.** `charset_rule: intersection` 이라 폰트 한 종이 학습 음절 풀 전체를 끌어내린다.
+게이트 통과 직후 교집합은 한글 2,345자로 5자 줄어 있었고, 원인 폰트 15종(`Bohyun`·`OwnglyphMoogungChae`·
+`770Balsa`·`116Watermelon` 등)을 빼서 **2,350자 = 기존과 동일**로 복구했다. 최종 손실은 `$ * { | }` 5자뿐이고
+그중 샘플러가 실제로 쓰는 건 `SPECIALS` 의 `$` `*` 둘이다(`$`·`*`·`|` 는 온글잎 9,516종의 공통 결손이라 복구 불가).
+구두점 `.,!?…:;` 과 괄호쌍은 전부 살아 있다.
+
+### 학습
+
+`train/korean_from_en.py`, §5 best ckpt(`eruku_short_fullmse` s30000)에서 resume, **폰트 디렉토리만 변경**.
+나머지 하이퍼파라미터 전부 동결(batch 4 × accum 8, lr 5e-5, style [1,8] / gen [1,12], max_img_len 4096,
+english_frac 0.15). `--val-fonts-dir assets/fonts_korean_v2/test` 로 val 폰트를 **고정**했다 — 지정하지 않으면
+풀이 바뀔 때 `split_train_fonts` 가 다른 폰트를 뽑아 val loss 가 런 간 비교 불가가 된다.
+
+```
+CUDA_VISIBLE_DEVICES=2 .venv/bin/python train/korean_from_en.py \
+  --resume finetune_runs/eruku_short_fullmse/checkpoint_step_030000.pth \
+  --out finetune_runs/eruku_fontmax \
+  --korean-fonts-dir assets/fonts_korean_v3/train \
+  --val-fonts-dir assets/fonts_korean_v2/test \
+  --style-words 1 8 --gen-words 1 12 --max-img-len 4096 --extra-steps 15000 \
+  --batch-size 4 --grad-accum 8 --lr 5e-5 --english-frac 0.15 \
+  --num-workers 16 --save-every 2000 --log-every 20 --val-every 2000 --save-samples 16
+```
+
+s30000 → s45000, **421.7분(7.0시간)**, 0.61 it/s, truncation drop 0.85%.
+train loss 는 resume 직후 **0.115 로 튀었다가**(기준선 종료값 0.048 의 2.4배 — 12,951종이 모델에게 진짜
+새 분포라는 뜻) 0.061 까지 내려왔다. 기동 시간은 `fonts_sizes.json` 캐시(D7 수정) 덕에 12,951종에서도 14.7초다.
+
+### 결과 (`eval/htr_cer.py --n 300 --coherent`, cfg=1.0, 고정 평가셋 `corpus/eval_lines_ko.txt`)
+
+> ⚠️ **평균 CER 단독으로 판정하면 안 된다.** CER 은 위로 열려 있어(runaway 는 3~5까지) 표본 몇 건이
+> 평균을 지배한다. 실측: **같은 모델·같은 텍스트**를 두 번 돌렸더니 기준선 seen 단문이
+> **0.280 과 1.076** 으로 나왔다(생성이 run-to-run 재현되지 않는다 — `eval.sh:53`).
+> 그래서 `eval/htr_cer.py` 가 **중앙값**과 **폭주율**(CER>1 = 목표보다 긴 출력 비율)을 함께 낸다.
+> 판정은 중앙값·폭주율로 하고 평균은 참고만 한다.
+
+**한글 seen (`fonts_korean_v2/train` 83종)**
+
+| | 평균CER | **중앙값** | **폭주율** |
+|---|---|---|---|
+| VAE 상한 (GT→VAE 왕복) | 0.031 | 0.000 | 0.3% |
+| 기준선 s30000 — 전체 | 0.120 | 0.026 | 1.3% |
+| **fontmax s45000 — 전체** | **0.084** | **0.000** | **1.0%** |
+| 기준선 — 단문(1~3) | 0.280 | 0.133 | 4.2% |
+| **fontmax — 단문** | **0.172** | **0.000** | **3.2%** |
+
+**한글 held-out (`fonts_korean_v2/test` 16종, 양쪽 모두 미노출)**
+
+| | 평균CER | **중앙값** | **폭주율** |
+|---|---|---|---|
+| VAE 상한 | 0.084 | 0.000 | 0.7% |
+| **기준선 s30000 — 전체** | **0.090** | **0.000** | 0.7% |
+| fontmax s45000 — 전체 | 0.189 | 0.028 | 0.7% |
+| 기준선 — 중문 / 장문 (중앙값) | — | **0.000 / 0.000** | 0% |
+| fontmax — 중문 / 장문 (중앙값) | — | 0.033 / 0.051 | 0% |
+
+영어(n=300): 기준선 0.034 / fontmax 0.032, 중앙값 양쪽 0.000 → **동률**.
+
+**결론**:
+- **seen 에서는 fontmax 가 세 통계 모두 우세**하다. 특히 단문 중앙값 **0.133 → 0.000** — 짧은 텍스트의
+  절반 이상이 완벽해졌다는 뜻으로, 평균 개선(0.280→0.172)보다 이쪽이 훨씬 견고한 신호다.
+- **held-out 에서는 fontmax 가 근소하게 나쁘다**(중앙값 0.000 → 0.028). 폭주율은 양쪽 동일(0.7%)이라
+  **runaway 문제가 아니라 평상시 품질이 조금 떨어진 것**이다.
+- 다만 **held-out 은 애초에 헤드룸이 없었다.** 기준선이 이미 VAE 상한에 붙어 있다(0.090 vs 상한 0.084,
+  gap 0.006). 반면 seen 은 gap 0.089 였고 fontmax 가 그중 **40%를 메웠다**(0.089 → 0.053).
+  즉 "폰트 다양성이 일반화에 실패했다"기보다 **그 held-out 세트에서는 잴 여지가 없었다**가 정확하다.
+  writer 일반화를 제대로 재려면 상한에서 먼 held-out 세트가 필요하다.
+- **best ckpt = `finetune_runs/eruku_fontmax/checkpoint_last.pth`(s45000)**. val_mse 는 s40000/s44000 이
+  더 낮지만 CER 은 s45000 이 최고다 — §5 의 "val_mse 로 고르지 말 것" 재확인.
+- 학습 도중(s38000·s40000)에는 held-out 단문에서 runaway 구간을 지난다. 중간 ckpt 로 판단하면 안 된다.
+
+### ⚠️ 귀속 한계 — 통제군을 돌리지 않았다
+
+기존 83폰트로 같은 15k step 을 더 돌린 통제군이 없으므로, seen 개선분에서 **"폰트가 늘어서"와
+"step 을 15k 더 돌려서"를 분리할 수 없다.** 미노출 writer 가 무승부라는 사실은 오히려 후자 쪽 설명과
+정합적이다 — 폰트 다양성이 일반화를 끌어올렸다면 held-out 이 같이 올라야 했다.
+"writer 다양성 확보"를 주장하려면 통제군(약 7시간) 이 필요하다.
+
+### 부수 발견
+
+- **기존 버그**: `make_english_dataset` 이 `exclude_fonts` 가 비면 안 될 때 `fonts_dir` 를 리스트로 덮어써
+  `Path()` 에서 `TypeError` 로 죽었다. `data.exclude_fonts` 기본값이 `[UlsanJunggu]` 라 **`english_frac > 0`
+  인 모든 학습이 기동 즉시 실패**하는 상태였다(커밋 5481f3f 이후). 한글 `make_dataset` 과 같이
+  charset 디렉토리와 폰트 리스트를 분리해 수정.
+- **환경 파손**: `.venv` 의 opencv 패키지가 껍데기만 남아 있었다(`__init__.py`·바이너리 없음). `uv.lock` 과
+  같은 4.13.0.92 로 재설치.
+- **`fonts_sizes.json` 캐시 신설** (`tools/font_sizes.py`, D7) — 없으면 `make_renderers` 가 폰트마다
+  순차 캘리브레이션을 DataLoader 워커마다 반복한다. 12,951종에선 필수다.
+
+
+## 9. 코퍼스 941줄 → 50,941줄 (2026-09-04) — 폭주가 사라졌다
+
+§8 의 오차 분해에서 남은 몫의 68%가 T5 였고, D10/D1 진단은 T5 가 보는 **텍스트 기반이 빈약**함을
+가리켰다. 실측: `korean_lines.txt` 는 22,996줄이지만 고유 941줄뿐이고, 자주 쓰는 2,350 음절 중
+**754자(32.1%)만 자연어 문맥에 등장**했다. 나머지 68%는 오직 `rand` 토큰(무작위 음절 나열, 전체의 15%)
+으로만 나온다. 폰트는 156배가 됐는데 **그 폰트로 렌더할 텍스트가 그대로**였던 셈이다.
+
+### 처리
+
+1. **중복 제거** — 22,996 → 941줄 (D10). 학습은 bit-identical(`build_pools` 가 `set` 으로 접는다).
+2. **평가 텍스트 분리·고정** — `build_texts` 가 학습 코퍼스에서 뽑고 있어 코퍼스를 건드릴 때마다
+   CER 비교가 끊겼다. 941줄 스냅샷을 `assets/corpus/eval_lines_ko.txt` 로 고정
+   (`eval/echo_metrics.py:EVAL_LINES_KO`). **이제 코퍼스를 키워도 지표가 살아남는다.**
+3. **확장** — `tools/fetch_corpus.py`, 한국어 위키백과(CC BY-SA, HF `heegyu/kowiki-sentences`).
+   커버리지 패스(새 음절을 들여오는 줄만, 1,272줄로 2,113자 도달) + 물량 패스.
+
+| | 확장 전 | 확장 후 |
+|---|---|---|
+| 라인 | 941 | **50,941** |
+| ko 어절 풀 | 5,196 | **184,529** (35×) |
+| **자연어 문맥 음절** | 754 / 2,345 (32.1%) | **2,113 / 2,345 (90.1%)** |
+| 학습 알파벳 | 2,512 | **2,512** (불변 — ckpt 핀 유지) |
+
+### 학습 — 폰트 효과와 분리된 A/B
+
+`eruku_corpusmax` 는 `eruku_fontmax` 와 **같은 출발점(s30000)·같은 15k step·같은 12,951폰트·같은
+하이퍼파라미터**로 돌리고 **코퍼스만** 바꿨다. 426.7분.
+
+### 결과 (n=300, coherent, cfg=1.0, 고정 평가셋)
+
+**한글 seen (83종)**
+
+| | 평균 | **중앙값** | **폭주율** |
+|---|---|---|---|
+| VAE 상한 | 0.031 | 0.000 | 0.3% |
+| 기준선 s30000 | 0.120 | 0.026 | 1.3% |
+| fontmax s45000 | 0.084 | 0.000 | 1.0% |
+| **corpusmax s45000** ⭐ | **0.069** | **0.000** | **0.3%** |
+| ↳ 단문(1~3) | 0.142 (fontmax 0.172, 기준선 0.280) | 0.000 | **1.1%** (3.2% / 4.2%) |
+
+**폭주율이 모든 세트에서 최저다** — 이게 코퍼스 확장의 가장 뚜렷한 효과다:
+
+| 폭주율(CER>1) | 기준선 | fontmax | **corpusmax** |
+|---|---|---|---|
+| seen | 1.3% | 1.0% | **0.3%** (= VAE 상한과 동률) |
+| held-out (v2/test) | 0.7% | 0.7% | **0.3%** |
+| 실제 사람 필적 4종 | 2.3% | 1.7% | **0.7%** |
+
+폭주 = "생성이 안 멈춤"(EOG 실패)이다. 자연어 문장을 35배 늘리자 **줄을 끝내는 법**을 배운 것으로 보인다.
+seen 에서 corpusmax 의 폭주율은 VAE 상한(0.3%)과 같아, 이 실패 모드는 사실상 소진됐다.
+
+영어(n=300): 기준선 0.034 / fontmax 0.032 / corpusmax 0.036 — 중앙값 전부 0.000, **동률**.
+
+### ⚠️ 미노출 폰트 두 세트는 모두 판정 불가였다
+
+| held-out 세트 | 문제 |
+|---|---|
+| `fonts_korean_v2/test` 16종 | **기준선이 이미 VAE 상한에 붙어 있다**(0.090 vs 상한 0.084, gap 0.006). 잴 여지가 없다 |
+| 실제 사람 필적 4종 (`custom_hw_fonts`) | **리더 바닥(GT 렌더)이 0.213** 이다. HTR 이 이 필적 자체를 못 읽어, 생성 CER(0.137)이 GT 보다 **낮게** 나온다 — 정칙적 자형으로 회귀할수록 점수가 좋아지는 역설 |
+
+두 세트 모두 평균·중앙값으로는 모델을 줄 세울 수 없다. 이 세트들에서 유효한 지표는 리더 바닥과
+무관한 **폭주율**뿐이고, 거기서는 corpusmax 가 일관되게 최저다.
+
+**writer 일반화를 제대로 재려면** ① VAE 상한에서 멀고 ② HTR 리더가 읽을 수 있는 held-out 폰트 세트가
+필요하다. 현재 12,951종 중 일부를 학습에서 빼 held-out 으로 쓰는 게 가장 간단하다(다음 실험).
+
+### 결론
+
+- **새 best = `finetune_runs/eruku_corpusmax/checkpoint_last.pth`(s45000)** — seen 기준 세 통계 모두 최고.
+- 폰트(§8)와 코퍼스(§9)는 **둘 다 T5 오차를 줄였고 겹치지 않았다**: 폰트는 단문 중앙값(0.133→0.000),
+  코퍼스는 폭주율(1.0%→0.3%)과 평균(0.084→0.069).
+- 남은 seen 오차 0.069 중 VAE 몫이 0.027(리더 0.004 제외 시) → **T5 몫이 0.038 로 줄었다**(§8 시점 0.053).
+  VAE 비중이 상대적으로 커졌고, 특히 미노출 폰트에서는 이미 VAE 가 병목 전부다
+  → **다음 레버는 12,951폰트로 VAE 재학습**(`--train-part full --htr-weight 0` → `--reset-vae` 재적응).
+
+
+## 10. ~~VAE 를 12,951폰트로 재학습 — 역효과다~~ (2026-09-07) — **결론 철회**
+
+> ⛔ **이 절의 결론은 철회됐다(2026-09-11). 측정값은 유효하나 해석이 틀렸다.**
+> 두 가지를 동시에 놓쳤다. ① 평가 probe 가 **인쇄체 계열 한 종류뿐**이었다
+> (`fonts_korean_v2/test` 16종은 83폰트 분포에 가깝다 — 12,951폰트 VAE 에겐 남의 동네다).
+> ② 판정을 **MSE 로** 했는데 MSE 는 ㅇ↔ㅁ 오치환에 사실상 눈이 멀었다(§11).
+> 손글씨 probe 를 추가하고 CER 로 다시 재면 **폰트 확장은 이득**이다. 정정 내용은 §10-정정 참조.
+
+
+§4 는 "폰트 수집이 유일한 진짜 레버"라고 적었지만, 그건 폰트가 99종뿐이라 **다양성 축을 실제로
+건드려보지 못한 상태의 추정**이었다(증강·균일빈도 대체 시도는 역효과였다). §8 로 12,951종이 생겼으니
+이제 그 가설을 직접 시험할 수 있다.
+
+`train/vae_korean.py --train-fonts-dir assets/fonts_korean_v3/train --train-part full --htr-weight 0
+--kl-weight 1e-6 --max-steps 30000` (원본 emuru_vae 출발, 2.1시간). val 은
+`fonts_korean_v2/test` 16종 — `vae_orig_pureL1` 이 쓰던 `fonts_korean_unseen` 과 **동일 세트**임을
+git 이름변경 기록(`R100`)으로 확인했다.
+
+### ① 폰트 렌더 held-out 복원 (roundtrip MSE↓)
+
+> ⚠️ **먼저 측정 버그를 고쳐야 했다.** `custom_datasets/korean/aux.py:182` 가 `random.Random()` 을
+> **시드 없이** 만들어(주석: "온라인 무한 렌더라 재현성 불필요") val 프로브가 매 실행 달라졌다.
+> 같은 가중치(`vae_fontmax` s30000)를 네 번 재니 **0.00644 / 0.00712 / 0.00766 / 0.00789** —
+> 편차 0.00145 로, 폰트 비교 격차(0.0011)보다 **컸다**. 즉 학습 중 기록된 `vae_val.csv` 곡선으로는
+> 두 런을 비교할 수 없다. `rng = random.Random(seed*1_000_003 + i)` 로 **인덱스별 결정적 시드**를
+> 주도록 고쳤고(학습 스트림 다양성은 유지 — 인덱스가 재사용되지 않는다), 3회 반복 sha1·MSE 일치를 확인했다.
+
+고정 프로브(64샘플, `fonts_korean_v2/test`)로 다시 잰 값:
+
+| VAE | KO MSE↓ | SSIM↑ |
+|---|---|---|
+| 원본 emuru | 0.01656 | 0.9012 |
+| **12,951폰트** `vae_fontmax` s30000 | 0.00660 | 0.9612 |
+| **83폰트** `vae_orig_pureL1` s30000 (같은 레시피·예산) | **0.00583** | **0.9661** |
+| 83폰트 릴리즈 `vae_korean_full_mse` s28000 | **0.00574** | **0.9666** |
+
+노이즈를 제거해도 83폰트가 13% 낫다(0.00583 vs 0.00660).
+
+### ② 생성 상한 (`eval/htr_cer.py --vae-only --n 300`) — 계보·예산 일치 비교
+
+| VAE | 계보 | seen 평균/중앙값/폭주율 | held-out 평균/중앙값/폭주율 |
+|---|---|---|---|
+| `vae_orig_pureL1` s30000 (83폰트) | emuru → full, 30k | **0.048 / 0.000 / 0.7%** | **0.085 / 0.000 / 0.7%** |
+| `vae_fontmax` s30000 (**12,951폰트**) | emuru → full, 30k | 0.077 / 0.000 / 1.0% | 0.139 / 0.051 / 2.0% |
+| `vae_korean_full_mse` s28000 (83폰트, 릴리즈) | dec 15k → full 15k → full_mse 28k | **0.031 / 0.000 / 0.3%** | **0.084 / 0.000 / 0.7%** |
+
+**같은 출발점·같은 레시피·같은 30k 예산에서 83폰트가 1.6배 낫다.** 계보/예산 교란을 제거해도 결론이 같다.
+덤으로 워밍스타트 체인(58k)이 단일 30k 보다 seen 상한을 1.6배 개선(0.048 → 0.031) — §4 의 워밍스타트
+권고가 재확인된다.
+
+### ③ 실제 스캔 손글씨 복원 (`experiments/vae_hw_recon.py`, n=20)
+
+| VAE | roundtrip MSE↓ | SSIM↑ |
+|---|---|---|
+| 원본 emuru | **0.0030** | 0.939 |
+| 83폰트 릴리즈 | 0.0058 | 0.943 |
+| 12,951폰트 | 0.0061 | **0.945** |
+
+동률(노이즈 범위). 분포 밖에서도 이득이 없다. (§6 의 프로토타입 붕괴도 재확인 — 한글 적응 VAE 둘 다
+원본보다 MSE 2배 나쁘고 SSIM 만 조금 낫다.)
+
+### 결론 — **폰트 다양성은 T5 에는 이득, VAE 에는 손해다**
+
+같은 12,951폰트가 T5 에서는 seen 단문 중앙값을 0.133 → 0.000 으로 만들었는데(§8), VAE 에서는
+상한을 1.6배 악화시켰다. 그럴듯한 설명은 **용량 차이**다 — T5 는 705M 파라미터로 다양성을 흡수하지만,
+VAE 는 학습 파라미터 14M 에 latent 가 열당 8차원 고정이라 스타일이 12,951가지로 퍼지면 용량을
+나눠 쓰게 되고 개별 복원이 뭉개진다. 83종처럼 서로 닮은 폰트에 특화하는 편이 재구성엔 유리하다.
+
+~~**→ 릴리즈 VAE(`vae_korean_full_mse` s28000) 유지. `vae_fontmax` 는 채택하지 않는다.**~~
+~~§4 의 "폰트 수집이 유일한 진짜 레버"는 **VAE 에 한해 반증됐다**(T5 에 대해서는 §8·§9 가 지지).~~
+**⛔ 위 두 줄 철회 — §10-정정 참조.**
+
+**남은 교란(정직하게)**: 12,951폰트 런은 30k 에서 아직 수렴 전이었다(83폰트는 16k 에 포화).
+더 긴 예산·워밍스타트로 격차를 뒤집을 가능성은 남아 있으나, val MSE 격차가 22k~30k 구간에서
+좁혀지지 않았고 CER 격차가 1.6배라 기대값은 낮다.
+
+### §10-정정 (2026-09-11) — probe 를 손글씨로 넓히고 CER 로 재면 결론이 뒤집힌다
+
+위 ①~③ 은 전부 **인쇄체 계열 probe**(`fonts_korean_v2/test`)에서만 잰 값이다. 그 세트는
+83폰트 학습 분포에 가까워 12,951폰트 VAE 에게 불리하게 기울어 있다. 손글씨 probe
+(`_val/probe_ownglyph` 16종)를 추가하고 **폰트 × HTR loss 2×2** 로 다시 쟀다
+(`_val/vae_2x2_report.py`, n=300, `_val/chain_2x2.log`):
+
+| VAE | 손글잎 MSE↓ | **손글잎 CER↓** | 인쇄체 MSE↓ | 인쇄체 CER↓ |
+|---|---|---|---|---|
+| 83폰트 · pure-L1 | 0.00613 | 0.030 | **0.00583** | 0.095 |
+| 83폰트 · HTR0.3 | 0.00996 | 0.015 | 0.00985 | 0.058 |
+| 12,951폰트 · pure-L1 | **0.00364** | 0.027 | 0.00660 | 0.108 |
+| **12,951폰트 · HTR0.3** | 0.00765 | **0.007** | 0.01206 | **0.062** |
+
+읽는 법이 세 가지다.
+
+1. **폰트 확장 판정이 probe 에 따라 뒤집힌다.** 인쇄체에서는 83폰트가 낫고(0.095 vs 0.108),
+   손글씨에서는 12,951폰트가 낫다(0.030 vs 0.027, HTR 조합에선 0.015 → 0.007 로 −53%).
+   위 ②의 "83폰트가 1.6배 낫다"는 **인쇄체 probe 안에서만 참**이다.
+2. **MSE 와 CER 이 반대로 움직인다.** HTR loss 는 모든 칸에서 MSE 를 **악화**시키면서 CER 을
+   절반으로 줄인다(0.030→0.015, 0.027→0.007). ①③ 이 MSE 로 내린 판정은 그래서 무효다.
+   자모교체 수가 300 → 63 으로 준 것이 같은 얘기다.
+3. **가장 큰 레버는 폰트가 아니라 HTR loss 다.** 손글씨 CER 기준 HTR loss −74%, 폰트 확장 −53%.
+
+**→ 정정된 결론: 폰트 확장은 손글씨에서 이득이고, HTR loss 와 함께 써야 한다.**
+"§4 의 '폰트 수집이 유일한 진짜 레버' 가 VAE 에 한해 반증됐다" 는 위 문장도 **철회**한다.
+채택 VAE 는 `vae_fontmax_htr2`(12,951폰트 + HTR loss)이며, `eruku_vae2` 에 내장돼 있다.
+
+**남은 함정 — 이 표로도 못 말하는 것.** `_val/probe_ownglyph` 16종은 **전부 학습 폰트 풀
+12,951종 안에 들어 있다**(16/16). 미노출 세트가 아니라 seen 세트의 다른 슬라이스다. 따라서
+이 표는 "손글씨 분포에서 낫다"까지만 말하고 **일반화는 말하지 않는다**. 진짜 미노출은
+`fonts_korean_v2/test`(0/16 포함)와 `assets/custom_hw_fonts` 둘뿐이다.
+
+
+
+## 11. §4 정정 — HTR loss 를 껐던 결정이 잘못됐다 (2026-09-09)
+
+§4 는 "**pure-L1 이 최선, HTR 은 MSE 를 최적화하지 않는다**"고 결론내고 권장 레시피를
+`--train-part full --htr-weight 0` 으로 못박았다. 그 판정 지표가 **roundtrip MSE** 였는데,
+**MSE 는 ㅇ↔ㅁ 같은 자모 혼동을 원리적으로 못 본다** — 작은 원의 안쪽을 채우거나 비우는 건
+픽셀 차이가 거의 없지만 글자는 완전히 달라진다. 즉 §4 는 **가독성을 못 재는 지표로 가독성 손실을 판정**했다.
+
+### A/B — 계보·예산 동일, `htr_weight` 만 다름
+
+`vae_orig_pureL1` (htr 0.0) vs `vae_orig_full_htr03_30k` (htr 0.3). 둘 다 `blowing-up-groundhogs/emuru_vae`
+출발, `--train-part full`, 30k step. 평가는 학습과 같은 768 기하(§10 ⚠️), n=300.
+
+| 온글잎(손글씨) | roundtrip MSE↓ | **CER↓** | **음절정확↑** | **자모교체↓** |
+|---|---|---|---|---|
+| pure-L1 (htr 0.0) | **0.00613** | 0.030 | 0.957 | 300 |
+| **HTR 0.3** | 0.00996 (+62%) | **0.015 (−50%)** | **0.981** | **145 (−52%)** |
+
+| 인쇄체(v2/test) | roundtrip MSE↓ | **CER↓** | **음절정확↑** | **자모교체↓** |
+|---|---|---|---|---|
+| pure-L1 (htr 0.0) | **0.00583** | 0.095 | 0.842 | 1163 |
+| **HTR 0.3** | 0.00985 (+69%) | **0.058 (−39%)** | **0.906** | **706 (−39%)** |
+
+**§4 의 MSE 관찰은 맞았다** — HTR 은 MSE 를 62~69% 악화시킨다. 틀린 건 거기서 "그러므로 끄는 게 낫다"로
+간 추론이다. 같은 조건에서 HTR 은 **CER 을 절반으로, 자모 교체를 39~52% 줄인다.**
+
+### 무엇이 혼동되는가 (pure-L1 최빈 자모 교체)
+
+| 프로브 | 최빈 혼동 |
+|---|---|
+| 온글잎 | **ㅁ→ㅇ(49)**, ㅜ→ㅡ(21), ㅡ→ㅗ(11), ㅊ→ㅎ(8), ㅏ→ㅣ(8) |
+| 인쇄체 | **ㅇ→ㅁ(59)**, ㅓ→ㅣ(33), ㅁ→ㅇ(30), ㅎ→ㅊ(28), ㅏ→ㅣ(27) |
+
+**ㅇ↔ㅁ 가 압도적 1위다.** HTR 0.3 을 켜면 온글잎에서 49→16 으로 준다.
+전부 "작은 획 하나가 닫히거나 열리는" 유형(ㅁ/ㅇ, ㄷ/ㅌ, ㅎ/ㅊ, ㅜ/ㅡ)이라 픽셀 차이가 미미해
+MSE 로는 안 잡히고 글자는 바뀐다. HTR 은 프로토타입 편향 때문에 정확히 이걸 막는다 —
+§4 가 "단점"으로 적은 그 성질이 실은 **핵심 이득**이었다.
+
+### 실무적 함의
+
+- **현행 릴리즈 VAE(`vae_korean_full_mse` s28000)는 우연히 무사하다.** 최종 단계는 htr 0 이지만
+  `dec(htr 0.3) → full(htr 0.3)` 로 워밍스타트돼 HTR 의 이득을 물려받았다. 기하를 고쳐 재측정한
+  상한에서도 1위다(온글잎 0.020 / 인쇄체 0.035, pure-L1 계열은 0.027~0.095).
+- **§4 의 권장 레시피를 그대로 따라 새로 학습하면 지금 배포 중인 것보다 나쁜 VAE 가 나온다.**
+  `--htr-weight 0` 단독 학습은 쓰지 말 것. 권장: `dec(htr 0.3) → full(htr 0.3)` 워밍스타트 유지.
+- **VAE 판정 지표에서 roundtrip MSE 를 단독으로 쓰지 말 것.** MSE 는 자모 혼동에 눈이 멀다.
+  CER·음절정확도·자모교체를 같이 볼 것.
+
+---
+
+## 12. InkSpire(FLUX-Fill LoRA + 레이아웃 CFM) 한글 재현 (2026-09)
+
+논문 *Learning to Generate Stylized Handwritten Text via a Unified Representation of Style, Content, and Noise*
+(Wang et al., ICLR 2026, `docs/inkspire.pdf`) 의 두 단계 분해 p(X, Xc | C, Xs) = p(Xc | C, Xs)·p(X | Xs, Xc) 를 합성 폰트
+페이지로 재현한다. ★ 논문은 Eruku/Emuru 와 직접 비교한 수치가 없다 — 아래 표가 유일한 근거다.
+코드: `custom_datasets/korean/page.py` · `models/inkspire.py` · `models/inkspire_layout.py` ·
+`train/inkspire*.py` · `infer/inkspire.py` · `configs/inkspire*.yaml`.
+
+### 설정
+
+| 항목 | 값 |
+|---|---|
+| 데이터 | 합성 폰트 페이지(`fonts_korean_v3/train` 12,951종, NanumGothic 제외), line_h U(40,80), P=512 패치, R-Mask |
+| 이미지 모델 | FLUX.1-Fill-dev + LoRA r=32/α=32 (115.9M, 표 8 13종), R-APE, 텍스트 인코더 제거(빈 프롬프트 캐시), guidance 30 |
+| 이미지 학습 | Prodigy lr 1 wd 0.01, batch 4, grad clip 1.0, 20k step, GPU 2 (H100 96GB). 실측 2.6 s/step → 20k ≈ 14.5h (계획 7~9h 과소) |
+| 레이아웃 모델 | masked CFM transformer 10층/512/8h (33M) + line_emb, 정규화 버퍼, 무레퍼런스 모드 10% |
+| 레이아웃 학습 | AdamW 1e-4, batch 160, 20k step |
+| 추론 | one-shot: ref 한 줄(잉크 48px, pitch 77) + 마스크된 아래 줄, ODE 20 step. 레이아웃 = std layout(표준폰트 bbox) 또는 `--layout-ckpt` |
+| 평가 | HTR CER **중앙값·폭주율**(평균 금지) + echo / `--style-ref-text "다람쥐 헌 쳇바퀴에 타고파"` 두 프로토콜 |
+
+### Stage 2 — 이미지 모델 (oracle 레이아웃 val, std layout 평가)
+
+```bash
+GPU=2 ./train.sh fetch-flux                                # hf auth login + 라이선스 수락 선행, 34GB
+GPU=2 ./train.sh inkspire --out finetune_runs/inkspire_smoke --max-steps 2 --batch-size 1 --P 256 \
+    --num-workers 0 --val-every 1 --val-batches 1 --val-steps 2 --save-every 1
+GPU=2 ./train.sh inkspire --out finetune_runs/inkspire_p512 --max-steps 2000 --val-every 500 --save-every 500
+#   → finetune_runs/inkspire_p512/samples/val_s002000.png 육안 (첫 줄 스타일로 아래 줄에 읽히는 한글?)
+GPU=2 ./eval.sh cer --ckpt inkspire:finetune_runs/inkspire_p512/lora_last --n 100 --coherent --binarize 200
+GPU=2 ./train.sh inkspire --out finetune_runs/inkspire_p512 --resume finetune_runs/inkspire_p512/lora_step_002000 --max-steps 20000
+```
+
+| step | val loss | s/step | peak VRAM | val_s*.png 육안 | CER 중앙값 (std layout, echo, n=100) |
+|---|---|---|---|---|---|
+| 500 | 0.193 | 2.6 (B=4, 0.39 it/s) | 30.6GB | ✅ 아래 줄 전부 ref 폰트 스타일로 재현, 숫자·일부 자모 오류 소수 | — |
+| 1000 | 0.189 | 2.6 | 30.6GB | one-shot 몽타주(`_debug/inkspire_s1000.png`) 4 writer 전부 스타일 전이, 숫자 약함 | (아래 Stage 4 표 s1000 행) |
+| 2000 | 0.184 | 2.6 | 30.6GB | ✅ | — |
+| 13000 | 0.171 | 3.9 (GPU 경합) | 30.6GB | ✅ 정답과 거의 구분 불가, 오류는 숫자에 몰림 | **0.190** (n=300, +layout, style-ref) |
+| 20000 | 0.168 | 2.5 | 30.6GB | ✅ 동일 | 0.222 (같은 조건) |
+
+★ **val loss 는 끝까지 내려갔지만(0.193 → 0.168) CER 은 13k 가 20k 보다 낫다**(중앙값 0.190 vs 0.222, 폭주율 1.7% vs 2.7%).
+손실로 체크포인트를 고르면 안 된다. 전체 평균 0.265 it/s(GPU 경합 포함) → 20k 에 약 21h.
+
+### Stage 3 — 레이아웃 모델
+
+```bash
+GPU=2 ./train.sh inkspire-layout --out finetune_runs/inkspire_layout_smoke --max-steps 2 --batch-size 4 \
+    --num-workers 0 --norm-batches 1 --val-every 1 --val-batches 1
+GPU=2 ./train.sh inkspire-layout --out finetune_runs/inkspire_layout                # val_l1_px 하강·정체 확인
+```
+
+| step | val loss | 생성 토큰 bbox L1 (px, held-out v2/test) |
+|---|---|---|
+| 스모크 s2 (batch 4) | 1.31 | 45.2 (미학습 기준값) |
+| 2000 | 0.333 | 11.2 |
+| 4000 | 0.285 | 11.2 |
+| 6000 | 0.261 | 12.8 |
+| 8000 | 0.255 | 11.7 |
+| 20000 | TBD | TBD |
+
+실측 메모(2026-09-10):
+- 첫 배치에서 1,049 토큰 페이지가 `max_len` 1024 를 넘어 크래시 → `KoreanLayoutDataset.MAX_TOKENS` 로 줄 경계 캡, 모델 `max_len` 2048.
+- batch 160 × 최대 2,048 토큰이면 attention·FFN 활성화가 **76GB** 까지 감 → MAX_TOKENS 1024 로 캡(초과는 pitch≈42px 극단뿐).
+  1024 캡 후에도 이미지 모델과 동시 학습 시 GPU 2 83GB, 이미지 run 속도 0.26→0.11 it/s 로 반토막 → 레이아웃은 s8000 에서 중단, 이미지 모델 뒤에 재개.
+- 속도 0.94 it/s(단독) → 20k 는 6h. 계획의 "40분"은 페이지 렌더 병목을 과소평가한 것. bbox L1 은 s2000 부터 11~12px 정체(val loss 는 계속 하강) — 20k 가 필요한지는 의문.
+- 추론 관찰: 줄 시작 Δx(= −이전 줄 폭)를 가장 못 맞춰 줄이 오른쪽으로 밀림(학습 줄은 page_w 를 채우지만 추론 줄은 짧음)
+  → `infer/inkspire.py` 에서 줄마다 첫 토큰을 좌측 여백으로 평행이동(학습 페이지는 전부 좌측 시작). 크기·간격은 예측값 유지.
+
+### Stage 4 — Eruku 비교 (같은 프로토콜, n=300, coherent, binarize 200, seed 0)
+
+```bash
+BEST=finetune_runs/eruku_corpusmax/checkpoint_last.pth
+INK=inkspire:finetune_runs/inkspire_p512/lora_last,finetune_runs/inkspire_layout/checkpoint_last.pth
+GPU=2 ./inference.sh inkspire --lora-dir finetune_runs/inkspire_p512/lora_last \
+    --layout-ckpt finetune_runs/inkspire_layout/checkpoint_last.pth --lines "첫 줄" "둘째 줄" "셋째 줄"
+for F in assets/fonts_korean_v2/train assets/fonts_korean_v2/test assets/custom_hw_fonts; do for CK in $BEST $INK; do
+  GPU=2 ./eval.sh cer --ckpt $CK --fonts-dir $F --n 300 --coherent --binarize 200 --seed 0 \
+      --style-ref-text "다람쥐 헌 쳇바퀴에 타고파" --out finetune_runs/_eval/inkspire_$(basename $F)_${CK%%:*}_sref.txt
+  GPU=2 ./eval.sh cer --ckpt $CK --fonts-dir $F --n 300 --coherent --binarize 200 --seed 0 \
+      --out finetune_runs/_eval/inkspire_$(basename $F)_${CK%%:*}_echo.txt
+done; done
+GPU=2 ./eval.sh exp gen_compare --ckpt-before $BEST --ckpt-after $INK \
+    --label-before "Eruku corpusmax s45000" --label-after "InkSpire one-shot" --out-dir finetune_runs/inkspire_p512/_eval
+```
+
+판정은 세트별 **중앙값 + 폭주율**만(평균 금지). custom_hw 는 폭주율만(리더 바닥 0.213). 레이아웃 기여는
+std layout(`inkspire:<lora>`) vs `--layout-ckpt` 행의 차이로 분리한다.
+
+| 세트 | 모델 | 프로토콜 | 평균 | 중앙값 | 폭주율 | GT 바닥 |
+|---|---|---|---|---|---|---|
+| seen v2/train | Eruku corpusmax s45000 | echo | 0.085 | 0.000 | 0.3% | 0.005 |
+| seen v2/train | Eruku corpusmax s45000 | style-ref | 0.083 | 0.000 | 0.0% | 0.005 |
+| seen v2/train | InkSpire s20000 std layout | echo | 0.247 | 0.102 | 3.0% | 0.005 |
+| seen v2/train | InkSpire s20000 std layout | style-ref | 0.225 | 0.095 | 2.0% | 0.005 |
+| seen v2/train | InkSpire s20000 + layout | echo | 0.325 | 0.200 | 2.7% | 0.005 |
+| seen v2/train | InkSpire s20000 + layout | style-ref | 0.330 | 0.143 | 1.7% | 0.005 |
+| held-out v2/test | Eruku corpusmax s45000 | echo | 0.123 | 0.029 | 0.3% | 0.026 |
+| held-out v2/test | Eruku corpusmax s45000 | style-ref | 0.064 | 0.000 | 0.0% | 0.026 |
+| held-out v2/test | InkSpire s20000 std layout | echo | 0.353 | 0.250 | 5.0% | 0.026 |
+| held-out v2/test | InkSpire s20000 std layout | style-ref | 0.278 | 0.197 | 2.3% | 0.026 |
+| held-out v2/test | InkSpire s20000 + layout | echo | 0.345 | 0.254 | 1.3% | 0.026 |
+| held-out v2/test | InkSpire s20000 + layout | style-ref | 0.368 | 0.222 | 2.7% | 0.026 |
+| held-out v2/test | InkSpire **s13000** + layout (최적 체크포인트) | style-ref | 0.324 | 0.190 | 1.7% | 0.026 |
+| custom_hw 4 | Eruku corpusmax s45000 | echo | 0.198 | 0.056 | 0.0% | 0.209 |
+| custom_hw 4 | Eruku corpusmax s45000 | style-ref | 0.083 | 0.000 | 0.0% | 0.209 |
+| custom_hw 4 | InkSpire s20000 std layout | echo | 0.419 | 0.300 | 5.7% | 0.209 |
+| custom_hw 4 | InkSpire s20000 std layout | style-ref | 0.346 | 0.226 | 3.3% | 0.209 |
+| custom_hw 4 | InkSpire s20000 + layout | echo | 0.422 | 0.333 | 2.3% | 0.209 |
+| custom_hw 4 | InkSpire s20000 + layout | style-ref | 0.384 | 0.253 | 2.3% | 0.209 |
+
+결론: **재현은 성공했지만 Eruku 를 못 이긴다.** held-out v2/test style-ref 기준 Eruku 는 중앙값 0.000 / 폭주 0.0%,
+InkSpire 최고 체크포인트는 0.190 / 1.7% 다. 세 세트·두 프로토콜 전부 같은 방향이다. 논문이 Eruku(Emuru) 와 직접 비교한
+수치가 없으므로, "더 좋다"는 주장은 최소한 **한글 합성 폰트 조건에서는 우리 측정으로 확인되지 않는다**.
+
+관찰 세 가지:
+1. **레이아웃 모델이 오히려 손해다.** 6 개 비교쌍 전부 std layout(표준폰트 bbox)이 같거나 낫다
+   (held-out style-ref 0.197 vs 0.222). s8000 의 bbox L1 11.7px 가 글자 위치를 흔들어 HTR 가독성을 깎는다.
+   n=40 중간 점검에서는 반대로 보였는데(0.076 vs 0.141) 표본이 작아 생긴 착시였다.
+2. **체크포인트 선택이 손실과 어긋난다.** val loss 최저는 s20000 이지만 CER 최저는 s13000.
+3. **폰트 의존이 크다.** held-out style-ref 폰트별 중앙값이 GowunBatang 0.000 ~ NanumBrushScript 0.442(폭주 16.7%).
+   획이 이어지는 붓글씨류가 가장 약하고, 숫자 오류가 전 구간에서 가장 흔하다.
+
+몽타주: `finetune_runs/inkspire_p512/_eval/`(s20000 + 레이아웃) vs `_eval_best/`(s13000 + std layout).
+후자에서 `gencmp_ko_diverse.png` 6 행 중 4 행은 Eruku 와 비슷한 품질로 스타일까지 옮기고, 나머지 2 행
+(ARCHISCULPTURE, Sam3 처럼 라틴·장식 레퍼런스)은 글자가 뭉개진다 — 폭주율 2% 대의 정체가 이것이다.
+전자는 레이아웃 모델 탓에 같은 행에서도 글자가 빠지거나 겹친다(표의 std layout 우세와 일치).
+
+남은 가능성(미검증): 논문 설정인 **P=1024**(우리는 512), 레이아웃 모델 20k 완주, 실손글씨 데이터.

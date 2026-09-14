@@ -47,3 +47,19 @@ release:                    # infer/release.py — 발행된 HF 릴리즈로 생
   max_new_tokens: 480
   bbox_crop: false
   exclude_writers: [UlsanJunggu]
+
+inkspire:                   # infer/inkspire.py — InkSpire one-shot [스타일ref | 정답 | InkSpire 여러 줄] (common 미사용)
+  lora_dir: finetune_runs/inkspire_p512/lora_last   # train/inkspire.py 의 save_lora 디렉토리
+  layout_ckpt: null         # 레이아웃 모델 ckpt. null = std layout(표준폰트 bbox, Stage 2 oracle 경로)
+  std_font: assets/fonts_label/NanumGothic-Regular.ttf   # Xc 표준폰트(학습 configs/inkspire.yaml 과 같아야 함)
+  lines_json: data/ref_set_clean/train_lines.json
+  n_writers: 4
+  lines: [다람쥐 헌 쳇바퀴에 타고파, 한국어 손글씨 생성 2024, 밝은 햇살 붉은 노을]   # 한 번에 생성할 줄들
+  steps: 20                 # ODE step (논문 ~20)
+  guidance: 30.0            # 학습과 동일해야 함 (configs/inkspire.yaml model.guidance)
+  seed: 0
+  exclude_writers: [UlsanJunggu]
+  cell_w: 380
+  cell_h: 72                # 줄당. 줄 수만큼 곱해진다
+  out: _debug/inkspire_show.png
+  device: cuda

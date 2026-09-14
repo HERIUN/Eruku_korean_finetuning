@@ -41,6 +41,9 @@ def make_parser():
     p.add_argument("--lines-json", default=None, help="offline lines_json (online-split 시 불필요)")
     p.add_argument("--out", default="finetune_runs/korean")
     p.add_argument("--vae-checkpoint", default="blowing-up-groundhogs/emuru_vae")
+    p.add_argument("--allow-fresh-optim", action="store_true",
+                   help="resume 시 optimizer/RNG 복원 실패를 허용(기본은 중단). "
+                        "Adam 모멘트가 0에서 다시 쌓이면 중단 없이 돌린 것과 결과가 달라진다")
     p.add_argument("--reset-vae", action="store_true",
                    help="resume/pretrained 로드 시 ckpt 의 vae.* 키를 strip → --vae-checkpoint 로 준 새 VAE 유지. "
                         "한글적응 full VAE 교체 후 Eruku 재적응 시 필수(안 쓰면 ckpt 의 옛 VAE 가 덮어씀)")
@@ -297,6 +300,75 @@ def _load_or_build_val_samples(args, out_dir, val_fonts=None):
     return samples, n_val
 
 
+def rng_state() -> dict:
+    """재개가 '중단 없이 돌린 것'과 같아지려면 Adam 모멘트만으론 부족하다 — RNG 도 같이 옮긴다.
+    (dropout·증강·DataLoader 워커 시드가 전부 여기서 갈린다.)"""
+    import numpy as _np
+    return {"python": random.getstate(), "numpy": _np.random.get_state(),
+            "torch": torch.get_rng_state(),
+            "cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None}
+
+
+def load_rng_state(st: dict | None) -> bool:
+    """rng_state() 결과를 되돌린다. 복원했으면 True."""
+    if not st:
+        return False
+    import numpy as _np
+    random.setstate(st["python"])
+    _np.random.set_state(st["numpy"])
+    torch.set_rng_state(torch.as_tensor(st["torch"], dtype=torch.uint8).cpu())
+    if st.get("cuda") and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all([torch.as_tensor(x, dtype=torch.uint8).cpu()
+                                      for x in st["cuda"]])
+    return True
+
+
+def require_optim_state(ck: dict, optimizer, allow_fresh: bool, what: str):
+    """resume 시 Adam 모멘트를 복원한다. 없거나 실패하면 **기본적으로 중단**한다.
+
+    조용히 새 옵티마이저로 시작하면 모멘트가 0에서 다시 쌓이면서 좋은 지점에서 밀려난다
+    (docs/EXPERIMENTS.md §4 의 '연장하면 퇴보' 가 이것이다). 의도한 경우만 --allow-fresh-optim."""
+    if "optimizer" not in ck:
+        msg = (f"{what} 에 optimizer state 가 없습니다 — 이어서 돌리면 Adam 모멘트가 초기화돼 "
+               f"중단 없이 돌린 것과 달라집니다. optimizer 를 포함한 checkpoint_step_*.pth 를 쓰거나, "
+               f"의도한 것이면 --allow-fresh-optim 을 주세요.")
+        if not allow_fresh:
+            raise SystemExit("resume 중단: " + msg)
+        print("  [warn] " + msg)
+        return False
+    try:
+        optimizer.load_state_dict(ck["optimizer"])
+    except Exception as e:
+        if not allow_fresh:
+            raise SystemExit(f"resume 중단: optimizer state 복원 실패 ({type(e).__name__}: {e}). "
+                             f"의도한 것이면 --allow-fresh-optim.")
+        print(f"  [warn] optimizer restore 실패(무시): {e}")
+        return False
+    print("  optimizer state restored (Adam 모멘트 포함)")
+    return True
+
+
+def log_run_config(out_dir, args):
+    """run config 기록: out_dir/train_config.yml 에 run 히스토리 누적 (train/inkspire*.py 도 사용).
+    CLI 덮어쓰기까지 반영된 최종 값 + 실제 적용된 샘플러 설정 전체를 남긴다."""
+    cfg_path = Path(out_dir) / "train_config.yml"
+    runs = (yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or []) if cfg_path.exists() else []
+    cur = {k: (list(v) if isinstance(v, tuple) else v)
+           for k, v in vars(args).items() if k != "sampler"}
+    cur["sampler"] = G.sampler_config(getattr(args, "sampler", None))   # 실제 적용된 샘플러 설정 전체
+    if getattr(args, "resume", None) and runs:    # resume 인데 파라미터가 달라지면 경고
+        prev = runs[-1]["args"]
+        for k in cur:
+            if k not in ("resume", "max_steps", "extra_steps") and prev.get(k) != cur[k]:
+                print(f"[config WARN] resume 인데 '{k}' 가 이전 run 과 다름: {prev.get(k)!r} -> {cur[k]!r}")
+    runs.append({"run": len(runs) + 1,
+                 "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
+                 "torch": str(torch.__version__),
+                 "args": cur})
+    cfg_path.write_text(yaml.safe_dump(runs, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    print(f"config logged: {cfg_path} (run #{len(runs)})")
+
+
 def train(args):
     torch.manual_seed(args.seed)
 
@@ -311,23 +383,7 @@ def train(args):
         raise FileNotFoundError("입력 자산 경로가 없습니다 (configs 의 paths: 확인):\n  "
                                 + "\n  ".join(_missing))
 
-    # ── run config 기록: train_config.yml 에 run 히스토리 누적 ──
-    cfg_path = out_dir / "train_config.yml"
-    runs = (yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or []) if cfg_path.exists() else []
-    cur = {k: (list(v) if isinstance(v, tuple) else v)
-           for k, v in vars(args).items() if k != "sampler"}
-    cur["sampler"] = G.sampler_config(getattr(args, "sampler", None))   # 실제 적용된 샘플러 설정 전체
-    if args.resume and runs:                      # resume 인데 파라미터가 달라지면 경고
-        prev = runs[-1]["args"]
-        for k in cur:
-            if k not in ("resume", "max_steps", "extra_steps") and prev.get(k) != cur[k]:
-                print(f"[config WARN] resume 인데 '{k}' 가 이전 run 과 다름: {prev.get(k)!r} -> {cur[k]!r}")
-    runs.append({"run": len(runs) + 1,
-                 "started_at": datetime.datetime.now().isoformat(timespec="seconds"),
-                 "torch": str(torch.__version__),
-                 "args": cur})
-    cfg_path.write_text(yaml.safe_dump(runs, allow_unicode=True, sort_keys=False), encoding="utf-8")
-    print(f"config logged: {cfg_path} (run #{len(runs)})")
+    log_run_config(out_dir, args)
 
     # ── model ──
     # OCR(OrigamiNet) 은 alpha=1.0 이라 미사용 → ocr_checkpoint=None 으로 생략 (기본)
@@ -386,12 +442,12 @@ def train(args):
             print(f"  [reset-vae] resume vae.* {n0-len(rstate)}키 strip → --vae-checkpoint({args.vae_checkpoint}) 유지")
         m, u = model.load_state_dict(rstate, strict=False)
         print(f"  model missing={len(m)} unexpected={len(u)}")
-        if "optimizer" in rck:
-            try:
-                optimizer.load_state_dict(rck["optimizer"])
-                print("  optimizer state restored")
-            except Exception as e:
-                print(f"  optimizer restore 실패(무시): {e}")
+        require_optim_state(rck, optimizer, args.allow_fresh_optim, args.resume)
+        if load_rng_state(rck.get("rng")):
+            print("  RNG state restored (python/numpy/torch/cuda)")
+        elif not args.allow_fresh_optim:
+            print("  [warn] ckpt 에 RNG state 없음 — dropout·증강 난수는 재현되지 않습니다"
+                  " (이 ckpt 가 RNG 저장 이전 것이면 정상)")
         # ★ load_state_dict 는 param_groups(lr 포함)를 저장값으로 되돌린다 → --lr 로 강제 재설정
         for g in optimizer.param_groups:
             g["lr"] = args.lr
@@ -656,7 +712,7 @@ def train(args):
 
             if args.save_every > 0 and step % args.save_every == 0:
                 ckpt = {"model": model.state_dict(), "optimizer": optimizer.state_dict(),
-                        "step": step}
+                        "step": step, "rng": rng_state()}
                 p = out_dir / f"checkpoint_step_{step:06d}.pth"
                 torch.save(ckpt, p)
                 print(f"  saved {p}")
@@ -664,7 +720,10 @@ def train(args):
     if args.val_every > 0 and step % args.val_every != 0:
         _run_val(step)   # 종료 시 마지막 val (직전 step에서 이미 했으면 중복 방지)
     final = out_dir / "checkpoint_last.pth"
-    torch.save({"model": model.state_dict(), "step": step}, final)
+    # last 에도 optimizer+rng 를 넣는다 — train.sh phase2 가 이 파일에서 resume 하는데
+    # 예전엔 모델만 있어서 Adam 모멘트가 조용히 날아갔다.
+    torch.save({"model": model.state_dict(), "optimizer": optimizer.state_dict(),
+                "step": step, "rng": rng_state()}, final)
     loss_f.close()
     if val_f is not None:
         val_f.close()
