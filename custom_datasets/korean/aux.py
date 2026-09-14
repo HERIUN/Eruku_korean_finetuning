@@ -87,6 +87,7 @@ class KoreanAuxDataset(Dataset):
         self.in_alpha = set(self.alpha.char2idx)
         self.bgs = _load_backgrounds()
         self.length = length
+        self.seed = seed          # __getitem__ 의 인덱스별 시드 기준 (val 프로브 재현성)
         self.blur_p, self.jitter_p, self.alpha_range = blur_p, jitter_p, alpha_range
         self.augment = augment   # shape 증강(획 morph + 소각 회전 + elastic warp) = 스타일 다양성 합성. 학습에만.
         self.uniform_freq = uniform_freq  # 논문식 균일 음절빈도(모든 글리프 균등 노출)
@@ -179,7 +180,10 @@ class KoreanAuxDataset(Dataset):
         return F.grid_sample(t, grid_t, mode="bilinear", padding_mode="border", align_corners=True)
 
     def __getitem__(self, i):
-        rng = random.Random()  # 온라인 무한 렌더라 재현성 불필요
+        # 인덱스별 결정적 시드. 예전엔 `random.Random()`(무시드)이라 같은 가중치를 재도 val 프로브가
+        # 매번 달라졌다 — 실측 편차 0.0064~0.0079 로, 폰트 비교 격차(0.0011)보다 컸다(2026-09-07).
+        # 인덱스마다 다른 시드라 학습 스트림의 다양성은 그대로다(길이=max_steps×batch 라 인덱스 재사용 없음).
+        rng = random.Random((self.seed * 1_000_003 + i) & 0xFFFFFFFF)
         base64, label, font_id = self._render_base(rng)
         if self.augment:
             base64 = self._augment_shape(base64, rng)

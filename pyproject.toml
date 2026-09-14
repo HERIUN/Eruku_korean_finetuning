@@ -11,6 +11,8 @@ dependencies = [
     "einops>=0.8",
     "numpy>=2.0,<3",
     "opencv-python-headless>=4.10",
+    "scikit-image>=0.24",        # experiments/ 의 SSIM (common.py, vae_*_sweep.py)
+    "pyarrow>=17",               # tools/fetch_corpus.py 의 HF parquet 읽기
     "pillow>=10",
     "fonttools>=4.50",
     "brotli>=1.1",
@@ -21,6 +23,16 @@ dependencies = [
     "accelerate>=1.0",
     "safetensors>=0.4",
     "pyyaml>=6",
+    "peft>=0.18",                # models/inkspire.py — FLUX LoRA
+    "prodigyopt>=1.1",           # train/inkspire.py — Prodigy optimizer (논문 레시피)
+    # eval/echo_metrics.py 의 LPIPS / FID / BFID. 선언이 빠져 있어 2026-09-14 에 5개 런
+    # 평가가 통째로 ModuleNotFoundError 로 죽었다 — 다시 빠뜨리지 말 것.
+    "lpips>=0.1.4",              # LPIPS(AlexNet)
+    "pytorch-fid>=0.3",          # FID — InceptionV3 특징 + Frechet 거리
+    "hwd @ git+https://github.com/aimagelab/HWD.git",   # BFID(Otsu 이진화 후 FID, HWD 공식)
+    "gudhi>=3.13",               # hwd 의존(선언 안 돼 있어 수동 설치 필요했다)
+    "matplotlib>=3.8",           # 〃
+    "six>=1.17",                 # 〃
 ]
 
 [project.optional-dependencies]

@@ -28,6 +28,11 @@ from infer.show import (load_model, render_in_font, style_tensor, gen_from_style
 from eval.echo_metrics import font_can_render
 
 # 복잡획(겹받침·쌍자음·밀집) 단문 집중 + 일반 단문/장문 대조군.
+# style ref 로 렌더할 기본 텍스트 — 타깃과 같은 스크립트여야 한다.
+# 한글 타깃인데 영어 ref 를 주면 그 writer 의 한글 자형을 하나도 안 보여주고 조건화하는 셈이다.
+STYLE_TEXT_KO = "다람쥐 헌 쳇바퀴에 타고파"      # 한글 pangram
+STYLE_TEXT_EN = "The quick brown fox jumps"
+
 CATS = {
     "ko_complex_short": ["밝은 햇살", "붉은 노을", "닭볶음탕", "삶은 계란",
                          "값진 보석", "짧은 만남", "넓은 들판", "굵은 빗줄기",
@@ -73,8 +78,10 @@ def main():
                     help="주면 lines_json 대신 이 디렉토리 폰트로 style ref 를 즉석 렌더(--style-text 를 씀). "
                          "영어 pretrained 와 비교할 때 필수 — 한글폰트 style 은 그 모델엔 OOD 라 "
                          "타깃 스크립트와 무관하게 붕괴해서 baseline 을 과소평가한다")
-    ap.add_argument("--style-text", default="The quick brown fox jumps",
-                    help="--style-fonts-dir 사용 시 style ref 로 렌더할 텍스트(전사로도 조건에 들어감)")
+    ap.add_argument("--style-text", default=None,
+                    help="--style-fonts-dir 사용 시 style ref 로 렌더할 텍스트(전사로도 조건에 들어감). "
+                         "기본은 카테고리별 자동(한글 카테고리→한글 pangram, en_*→영어). "
+                         "영어 pretrained 와 비교할 때만 영어로 고정할 것 — 한글 style 은 그 모델엔 OOD 다")
     ap.add_argument("--out-dir", default=str(REPO / "finetune_runs" / "eruku_short_fullmse" / "_eval"))
     ap.add_argument("--n-rows", type=int, default=6, help="카테고리별 행(스타일×텍스트) 수")
     ap.add_argument("--cfg", type=float, default=1.25)
@@ -114,6 +121,8 @@ def main():
             by_w = {w: v for w, v in by_w.items() if w.split("#")[0] not in excl}
         writers = list(by_w)
 
+    cur_style = [args.style_text or STYLE_TEXT_KO]   # 카테고리 루프에서 갱신(클로저 공유)
+
     def font_of(base):
         return _fonts_by_stem[base] if render_style else FONTS_DIR / f"{base}.ttf"
 
@@ -125,7 +134,7 @@ def main():
             fp = font_of(w.split("#")[0])
             if not fp.exists() or not font_can_render(fp, target):
                 continue
-            if render_style and not font_can_render(fp, args.style_text):
+            if render_style and not font_can_render(fp, cur_style[0]):
                 continue
             return w
         return None
@@ -133,8 +142,8 @@ def main():
     def make_ref(w):
         """writer 키 w → style ref {text, arr}. 즉석 렌더 모드면 그 폰트로 style 텍스트를 렌더."""
         if render_style:
-            return {"text": args.style_text,
-                    "arr": render_in_font(font_of(w.split("#")[0]), args.style_text)}
+            return {"text": cur_style[0],
+                    "arr": render_in_font(font_of(w.split("#")[0]), cur_style[0])}
         r = rng.choice(by_w[w])
         return {"text": r["text"], "arr": np.array(Image.open(r["image_path"]).convert("L"))}
 
@@ -148,7 +157,8 @@ def main():
 
     cats = {k: v for k, v in CATS.items() if not args.cats or k in args.cats}
     for cat, texts in cats.items():
-        print(f"[{cat}]")
+        cur_style[0] = args.style_text or (STYLE_TEXT_EN if cat.startswith("en") else STYLE_TEXT_KO)
+        print(f"[{cat}]" + (f"  style ref: {cur_style[0]!r}" if render_style else ""))
         grid = []
         hdr = header_row(col_labels, CW, CH)
         grid.append(hdr); grid.append(np.full((3, hdr.shape[1]), 80, np.uint8))

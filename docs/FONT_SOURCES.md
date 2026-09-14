@@ -311,9 +311,56 @@ D6 가 바로 이것이고, cmap 기반으로는 못 고친다.
 
 ---
 
-## 8. 아직 안 한 것
+## 8. 전량 수집 · 학습 투입 (2026-09-02)
 
-- **학습 투입** — `fonts_korean_v2/train` 이동, `fonts_charsets.json` 갱신,
-  `MixedLineSampler` 비중 재조정, README/`docs/DATA_GENERATION.md` 폰트 수 갱신.
-- **라이선스 적합성 최종 판단** (1·2절 ⚠️).
+온글잎 배포가능 폰트를 **전량** 받아 학습에 넣었다. 측정 결과는
+[`EXPERIMENTS.md` §8](EXPERIMENTS.md#8-폰트-풀-83종--12951종-2026-09-02--seen-37-미노출-writer-무승부).
+
+| | 결과 |
+|---|---|
+| 온글잎 | 11,989 전량 조회 → **11,946종** (신규 10,951 + 기존 995, 글리프해시 중복 1,032 제거, 실패 6). 15GB |
+| 눈누 | **소진 확정**. sitemap 1,172 페이지 전부 처리, 남은 실패 5건은 jsdelivr URL 이 죽어 영구 실패 |
+| 게이트 | 온글잎 → OK 11,940 · PARTIAL 2 · REJECT 4 |
+| 학습 풀 | `assets/fonts_korean_v3/train/` **12,951종** (심볼릭 링크, git 제외) |
+
+```bash
+# 1) 전량 수집 — --n 은 카탈로그 크기로 클램프되므로 크게 줘도 된다. 기보유분은 SKIP 으로 이어받는다
+.venv/bin/python assets/download_script/tools_fetch_free.py --src ownglyph --n 12000 --workers 12 --sleep 0.2
+# 2) 게이트 (REJECT→_rejected/, PARTIAL→_partial/)
+.venv/bin/python tools/font_pool_audit.py --fonts-dir $PWD/assets/fonts_korean_new/ownglyph --workers 48 --move
+# 3) 단일 디렉토리로 합치기 (심볼릭 링크). fonts[0].parent 규약상 여러 디렉토리를 섞으면 안 된다
+mkdir -p assets/fonts_korean_v3/train && for d in assets/fonts_korean_v2/train \
+    assets/fonts_korean_new/noonnu assets/fonts_korean_new/ownglyph; do
+  for f in $d/*.[to]tf; do ln -s "$(realpath $f)" assets/fonts_korean_v3/train/; done; done
+# 4) 캐시 2개 — charset(실렌더) + sizes(캘리브레이션)
+.venv/bin/python tools/font_charset.py --fonts-dir assets/fonts_korean_v3/train --force --workers 48
+.venv/bin/python tools/font_sizes.py   --fonts-dir assets/fonts_korean_v3/train --workers 48
+```
+
+### ⚠️ 교집합을 반드시 수치로 확인할 것
+
+`charset_rule: intersection` 이라 **폰트 한 종이 학습 음절 풀 전체를 끌어내린다.** 게이트를 통과해도
+안심하면 안 된다 — 게이트의 ASCII 검사는 `a-zA-Z0-9` 만 보고 기호는 안 본다. 실제로 게이트 직후
+교집합이 한글 2,345자(−5)·기호 −18자였고, 원인 폰트 15종을 뺀 뒤 **2,350자로 복구**했다.
+
+```bash
+.venv/bin/python -c "
+from custom_datasets.korean.split import font_charset_cps, DEFAULT_EXCLUDE_FONTS
+from pathlib import Path
+cps, syls = font_charset_cps(Path('assets/fonts_korean_v3/train/fonts_charsets.json'),
+                             'intersection', exclude=DEFAULT_EXCLUDE_FONTS)
+print(len(cps), len(syls))   # 2436 2350 이어야 한다
+"
+```
+
+최종 손실은 `$ * { | }` 5자이고, 그중 샘플러가 쓰는 건 `SPECIALS` 의 `$` `*` 둘뿐이다
+(`$`·`*`·`|` 는 온글잎 9,516종의 공통 결손이라 복구 불가). 구두점·괄호쌍은 전부 살아 있다.
+
+## 9. 아직 안 한 것
+
+- **라이선스 적합성 최종 판단** (1·2절 ⚠️). 온글잎은 실명 개인 손글씨이고 `allowOwnglyphDeploy` 는
+  온글잎의 배포 동의이지 제3자 생성모델 학습 동의가 아니다. **현재는 학습에만 쓰고 폰트 파일·학습
+  모델을 재배포하지 않는 전제**로 진행 중이다.
 - **수집 폰트의 재배포** — HF 업로드 등은 하지 않는다.
+- **통제군 런** — 기존 83폰트로 같은 15k step 을 더 돌린 비교군이 없어, seen 개선분에서 폰트 효과와
+  추가 학습 효과를 분리하지 못했다 (`EXPERIMENTS.md` §8 「귀속 한계」).

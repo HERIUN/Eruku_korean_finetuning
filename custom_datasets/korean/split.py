@@ -351,12 +351,12 @@ def make_english_dataset(style_range=(1, 8), gen_range=(1, 32), length=None, see
                          sampler_cfg=None, paths=None, exclude_fonts=None):
     """라틴 폰트로 영어 전용 split 데이터. 학습에 한글 데이터와 섞어 영어 스타일 다양성 보강."""
     assert fonts_dir, "english fonts_dir 필요"
-    ensure_font_charsets(fonts_dir)          # 새 폰트가 있으면 charset 캐시 갱신 (D6)
-    if exclude_fonts:                        # 라틴 폰트엔 기본 제외 대상이 없다(있으면 config 로)
-        fonts_dir = [p for p in font_files(fonts_dir, exclude_fonts)]
-    style_s, gen_s = build_english_samplers(style_range, gen_range, fonts_dir, seed=seed,
+    charset_dir = Path(fonts_dir)            # charset json 은 디렉토리 기준 — 폰트 리스트와 분리한다
+    ensure_font_charsets(charset_dir)        # 새 폰트가 있으면 charset 캐시 갱신 (D6)
+    fonts = font_files(charset_dir, exclude_fonts)   # 라틴 폰트엔 기본 제외 대상이 없다(있으면 config 로)
+    style_s, gen_s = build_english_samplers(style_range, gen_range, charset_dir, seed=seed,
                                             sampler_cfg=sampler_cfg, paths=paths)
-    return KoreanSplitFontSquare(Path(fonts_dir), str(data_paths(paths)["backgrounds_dir"]),
+    return KoreanSplitFontSquare(fonts, str(data_paths(paths)["backgrounds_dir"]),
                                  style_s, gen_s, length=length)
 
 

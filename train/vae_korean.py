@@ -65,6 +65,7 @@ _PROBE_FONTS = ["DoHyeon.ttf", "GowunBatang.ttf", "Gaegu.ttf"]
 # ── eval: held-out 폰트 clean-bw roundtrip MSE/SSIM (docs/_vae_capacity 와 동일 지표) ──
 @torch.no_grad()
 def build_val_bw(n, seed, fonts_dir):
+    """held-out val 프로브. KoreanAuxDataset 이 인덱스별 결정적 시드를 쓰므로 런 간 재현된다."""
     ds = KoreanAuxDataset(length=n, seed=seed, fonts_dir=fonts_dir)
     return torch.stack([ds[i]["bw"] for i in range(n)], 0)  # [n,1,64,768] [-1,1] clean
 
@@ -209,6 +210,9 @@ def make_parser():
     p.add_argument("--seed", type=int, default=42)
     p.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     p.add_argument("--resume", default=None, help="vae_sXXXX 디렉토리(가중치+trainer.pt)")
+    p.add_argument("--allow-fresh-optim", action="store_true",
+                   help="resume 시 optimizer/RNG 복원 실패를 허용(기본은 중단). "
+                        "Adam 모멘트가 0에서 다시 쌓이면 중단 없이 돌린 것과 결과가 달라진다")
     return p
 
 
@@ -257,16 +261,21 @@ def main():
     opt_params = [p for p in vae.parameters() if p.requires_grad]
     if log_var is not None:
         opt_params = opt_params + [log_var]
+    from train.core import rng_state, load_rng_state, require_optim_state
+
     optimizer = torch.optim.AdamW(opt_params, lr=args.lr, weight_decay=1e-2)
     start_step = 0
     if args.resume:
         tp = Path(args.resume) / "trainer.pt"
+        if not tp.exists() and not args.allow_fresh_optim:
+            raise SystemExit(f"resume 중단: {tp} 가 없어 Adam 모멘트를 복원할 수 없습니다 "
+                             f"(가중치만으로 이어 돌리면 중단 없이 돌린 것과 달라집니다). "
+                             f"의도한 것이면 --allow-fresh-optim.")
         if tp.exists():
-            st = torch.load(tp, map_location="cpu")
-            try:
-                optimizer.load_state_dict(st["optimizer"])
-            except Exception as e:
-                print(f"  optim restore 실패(무시): {e}")
+            st = torch.load(tp, map_location="cpu", weights_only=False)
+            require_optim_state(st, optimizer, args.allow_fresh_optim, str(tp))
+            if load_rng_state(st.get("rng")):
+                print("  RNG state restored (python/numpy/torch/cuda)")
             for g in optimizer.param_groups:
                 g["lr"] = args.lr
             if log_var is not None and "log_var" in st:
@@ -323,7 +332,7 @@ def main():
     def save(step):
         d = out / f"vae_s{step}"
         vae.save_pretrained(d)
-        ckpt = {"step": step, "optimizer": optimizer.state_dict()}
+        ckpt = {"step": step, "optimizer": optimizer.state_dict(), "rng": rng_state()}
         if log_var is not None:
             ckpt["log_var"] = float(log_var.detach())
         torch.save(ckpt, d / "trainer.pt")

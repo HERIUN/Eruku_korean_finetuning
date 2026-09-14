@@ -27,3 +27,5 @@ custom_datasets/font_square/tps/eigen-3.4.0/
 # misc
 .DS_Store
 nohup.out
+assets/fonts_korean_v3/
+assets/fonts_korean_v4/

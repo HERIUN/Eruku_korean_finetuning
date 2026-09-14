@@ -99,6 +99,10 @@ def make_parser():
     p.add_argument("--grad-accum", type=int, default=1)
     p.add_argument("--lr", type=float, default=1e-4)
     p.add_argument("--noise-prob", type=float, default=0.1, help="NoisyTeacherForcing 노이즈 확률(원본 0.1)")
+    p.add_argument("--train-fonts-dir", default=None,
+                   help="학습 폰트 dir(기본 fonts_korean_v2/train). 확대셋 지정용 — "
+                        "vae_korean.py 와 같은 플래그. ⚠️ 리더를 바꾸면 과거 CER 과 비교가 끊긴다: "
+                        "평가용 리더는 finetune_runs/aux_htr_ko/htr_s20000 로 고정해 둘 것")
     p.add_argument("--num-workers", type=int, default=8)
     p.add_argument("--save-every", type=int, default=2000)
     p.add_argument("--log-every", type=int, default=50)
@@ -142,7 +146,8 @@ def main():
             print(f"  resume step={start_step}")
 
     total = args.max_steps * args.grad_accum * args.batch_size
-    ds = KoreanAuxDataset(length=total, seed=args.seed + start_step)
+    ds = KoreanAuxDataset(length=total, seed=args.seed + start_step,
+                          fonts_dir=args.train_fonts_dir)
     loader = DataLoader(ds, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers,
                         collate_fn=aux_collate, drop_last=True, pin_memory=True,
                         persistent_workers=args.num_workers > 0)

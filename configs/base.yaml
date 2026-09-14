@@ -37,8 +37,10 @@ optim:
 # 입력 자산 — 코퍼스와 폰트/배경 디렉토리. 상대경로는 저장소 루트 기준으로 펴진다.
 # 다른 코퍼스·폰트로 실험할 때 여기만 바꾸면 된다(코드 수정 불필요).
 paths:
-  corpus_korean: assets/corpus/korean_lines.txt     # 한글 어절 공급 (고유 941줄 → 어절 5,196)
+  corpus_korean: assets/corpus/korean_lines.txt     # 한글 어절 공급 (50,941줄 → 어절 184,529)
+                                                    # 2026-09-04 위키백과로 확장, 자연어 음절 754→2,113
                                                     # (chars.txt 낱글자는 더 이상 ko 풀에 안 섞는다 — D2)
+                                                    # ※ 평가 텍스트는 corpus/eval_lines_ko.txt 로 분리 고정
   corpus_english: assets/corpus/english_words.txt   # 영어 사전 466,551 (dwyl/english-words)
   korean_fonts_dir: assets/fonts_korean_v2/train    # 한글 writer 83종 (+ fonts_charsets.json)
   english_fonts_dir: assets/fonts_english           # 라틴 writer 177종 (english_frac > 0 일 때)

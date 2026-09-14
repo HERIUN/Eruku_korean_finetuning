@@ -53,6 +53,12 @@ technology continues to change the way people communicate work and live their ev
 children laughed and played in the park while their parents watched them from a nearby wooden bench .""".split("\n")
 
 
+# 평가 텍스트는 **학습 코퍼스와 분리**한다. build_texts 는 라인 리스트에서 rng.choice 로 뽑으므로
+# 학습 코퍼스가 바뀌면 같은 seed 라도 다른 텍스트가 나와 과거 CER 과 비교가 끊긴다.
+# 이 스냅샷(2026-09-04, 중복 제거 후 941줄)을 고정해 둬야 코퍼스를 키워도 지표가 살아남는다.
+EVAL_LINES_KO = "assets/corpus/eval_lines_ko.txt"
+
+
 def build_texts(n, rng, english=False, coherent=False, max_words=15):
     """다양한 길이(어절 1~max_words)의 라인 n개. english=True 면 영어(pretrained 비교용).
     coherent=True 면 실제 문장에서 세그먼트 추출(OCR 신뢰성↑, CER 덜 비관적).
@@ -60,7 +66,7 @@ def build_texts(n, rng, english=False, coherent=False, max_words=15):
     import re as _re
     if coherent:
         base = ([" ".join(_re.findall(r"[A-Za-z0-9']+", s)) for s in EN_COHERENT] if english
-                else [ln.strip() for ln in (HERE / "assets/corpus/korean_lines.txt")
+                else [ln.strip() for ln in (HERE / EVAL_LINES_KO)
                       .read_text(encoding="utf-8").splitlines() if ln.strip()])
         out = []
         for i in range(n):
@@ -78,7 +84,7 @@ def build_texts(n, rng, english=False, coherent=False, max_words=15):
         words = sorted({w.strip() for w in cand if _re.match(r"^[A-Za-z][A-Za-z'-]*$", w.strip() or "x")})
         nums = lambda: rng.choice(["2024", "98.7%", "4,500", "123", "2024-05-11", "15:30"])
     else:
-        lines = (HERE / "assets/corpus/korean_lines.txt").read_text(encoding="utf-8").splitlines()
+        lines = (HERE / EVAL_LINES_KO).read_text(encoding="utf-8").splitlines()
         words = sorted({w for ln in lines for w in ln.split() if w.strip()})
         nums = lambda: rng.choice(["2024년", "98.7%", "4,500원", "123", "010-1234-5678", "15:30"])
     out = []
@@ -131,7 +137,7 @@ def main():
     lpips_net = lpips_lib.LPIPS(net='alex', verbose=False).to(device).eval()
     incep = InceptionV3([InceptionV3.BLOCK_INDEX_BY_DIM[2048]]).to(device).eval()
 
-    fonts = sorted(p for p in Path(args.fonts_dir).glob("*.ttf"))
+    fonts = sorted(p for p in Path(args.fonts_dir).glob("*.[ot]tf"))   # otf 도 (custom_hw)
     texts = build_texts(args.n, rng, english=args.english, coherent=args.coherent, max_words=args.max_words)
 
     feats_gt, feats_gen = [], []
@@ -141,7 +147,7 @@ def main():
     (bdir / "fake" / "w").mkdir(parents=True); (bdir / "real" / "w").mkdir(parents=True)
     per = []   # (nw, mse, ssim, lpips)
     done = 0
-    for text in texts:
+    for i_t, text in enumerate(texts):
         # 이 텍스트를 렌더 가능한 폰트 하나 고르기(토푸 방지)
         rng.shuffle(fonts)
         fp = next((f for f in fonts if font_can_render(f, text)), None)
@@ -150,9 +156,12 @@ def main():
         gt = render_in_font(fp, text)                          # 정답(깨끗 렌더)
         stext = "" if args.no_style_text else text
         try:
+            # ★ eruku.py:168 이 추론에서도 latent_dist.sample() 을 쓴다 → 시드 고정 없이는
+            # 같은 모델을 다시 재도 MSE 가 달라진다(htr_cer.py 와 같은 수정).
             gen = gen_from_style(model, style_tensor(gt), stext, text,
                                  args.cfg, args.max_new_tokens, device,
-                                 max_img_len=args.max_img_len)
+                                 max_img_len=args.max_img_len,
+                                 seed=args.seed * 1_000_003 + i_t)
         except Exception as e:
             print(f"  [skip] {text[:20]!r}: {e}"); continue
         # 정렬: height 64, 공통 폭 패딩
