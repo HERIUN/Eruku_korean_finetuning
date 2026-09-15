@@ -9,9 +9,6 @@
 #   ./train.sh htr    [args...]        한글 HTR 리더 (평가·VAE loss 겸용)
 #   ./train.sh data   [args...]        학습 데이터 파이프라인 샘플 덤프 (sanity check)
 #   ./train.sh refset [args...]        추론용 style ref 세트 생성 (data/ref_set*)
-#   ./train.sh inkspire        [args]  InkSpire 이미지 모델: FLUX.1-Fill LoRA (configs/inkspire.yaml)
-#   ./train.sh inkspire-layout [args]  InkSpire 레이아웃 모델: masked CFM (configs/inkspire_layout.yaml)
-#   ./train.sh fetch-flux              FLUX.1-Fill-dev 34GB + 빈 프롬프트 캐시 (hf auth login + 라이선스 수락 선행)
 #
 # 뒤에 붙인 인자는 그대로 넘어간다:  ./train.sh en2ko --lr 1e-5 --max-steps 5000
 # 각 하위 명령의 전체 인자는 `--help` 로:  ./train.sh en2ko --help
@@ -126,9 +123,6 @@ case "$cmd" in
   htr)    run "$PY" train/aux_htr.py "$@" ;;
   data)   run "$PY" custom_datasets/korean/split.py "$@" ;;
   refset) run "$PY" custom_datasets/korean/fontset.py "$@" ;;
-  inkspire)        run "$PY" train/inkspire.py "$@" ;;
-  inkspire-layout) run "$PY" train/inkspire_layout.py "$@" ;;
-  fetch-flux)      run "$PY" tools/fetch_flux.py "$@" ;;
   ""|-h|--help|help) usage ;;
   *) echo "알 수 없는 명령: $cmd" >&2; echo >&2; usage >&2; exit 1 ;;
 esac

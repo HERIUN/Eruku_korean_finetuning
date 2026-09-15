@@ -298,15 +298,14 @@ style 참조 이미지의 전사 텍스트. `f"{style_text}<sog>{gen_text}"` 로
 
 ```
 # 진입점 (루트에는 이 3개만)
-train.sh                   # 학습·데이터: best|en2ko|phase1|phase2|vae|htr|data|refset|inkspire|inkspire-layout|fetch-flux
-inference.sh               # 생성·시각화·릴리즈: best|hf|show|matrix|echo|refset|release|inkspire
+train.sh                   # 학습·데이터: best|en2ko|phase1|phase2|vae|htr|data|refset
+inference.sh               # 생성·시각화·릴리즈: best|hf|show|matrix|echo|refset|release
 eval.sh                    # 평가·감사·실험: best|cer|easyocr|echo|all|fonts|exp
 # 설정  (데이터 합성 ~ 학습 파라미터 전부, CLI > yaml > 코드 기본값)
 configs/base.yaml          # ★ 학습 전체 항목 + 기본값 (주석 포함, 여기부터 보면 됨)
 configs/phase1.yaml        # 논문 Phase 1 레시피 / phase2.yaml / korean_from_en.yaml
 configs/eval.yaml          # 평가 (common + cer/htr_cer/echo/all 섹션)
-configs/infer.yaml         # 추론·시각화 (common + show/matrix/release/inkspire 섹션)
-configs/inkspire.yaml      # InkSpire 이미지 모델(FLUX-Fill LoRA) / inkspire_layout.yaml 레이아웃 모델
+configs/infer.yaml         # 추론·시각화 (common + show/matrix/release 섹션)
 configs/loader.py          # yaml 로더 (_base_ 상속, CLI 덮어쓰기, 오타 키 거부)
 configs/README.md          # 우선순위·상속·섹션(scopes)·새 인자 추가법
 # 학습
@@ -317,30 +316,24 @@ train/korean_from_en.py    # 영어 pretrained → 한글 직접 (Phase 1 생략
 train/eruku_continous.py   # (원본 repo 스타일 트레이너: wandb/accelerate/webdataset 기반, 참고용)
 train/vae_korean.py        # VAE 한글 적응 finetune (--train-part dec|full, htr/pyramid/logvar 항)
 train/aux_htr.py           # 한글 HTR 리더 finetune (VAE 의 HTR loss + 평가 리더 겸용)
-train/inkspire.py          # InkSpire 이미지 모델 학습 (FLUX.1-Fill + LoRA, Prodigy) — docs/EXPERIMENTS.md §12
-train/inkspire_layout.py   # InkSpire 레이아웃 모델 학습 (masked CFM, AdamW)
 # 데이터  (상세: docs/DATA_GENERATION.md §8)
 custom_datasets/korean/split.py    # 온라인 한글 split 데이터셋 (+ CLI 샘플 덤프, --show-model-input)
 custom_datasets/korean/fontset.py  # 오프라인 라인 생성기 + MixedLineSampler/build_pools (공용)
 custom_datasets/korean/aux.py     # HTR 학습용 (라인이미지, 전사) 데이터셋 + alphabet.py
-custom_datasets/korean/page.py    # InkSpire 페이지 렌더러: P×P 패치 {x,xc,mask} + 글자 bbox 레이아웃 토큰
 custom_datasets/upstream/  # 원본 repo 코드 vendored (수정 금지 — upstream/README.md 참고)
 custom_datasets/korean/    # 이 repo 추가분 (upstream 을 import, 역방향 없음)
 custom_datasets/hw_line_sample/    # 실제 손글씨 라인 20장 + label.txt (미러링/복원 평가용)
 tools/                     # font_audit(폰트 품질 감사) · font_charset(실렌더 charset 생성)
-                           #   · fetch_aux · hf_upload(HF 릴리즈) · fetch_flux(FLUX.1-Fill-dev + 빈 프롬프트 캐시)
+                           #   · fetch_aux · hf_upload(HF 릴리즈)
 # 추론 / 평가  (infer/show.py 가 공유 라이브러리: load_model/gen_arr/render_in_font …)
 infer/release.py           # 발행된 HF 릴리즈(공개 API)로 생성 — 로컬 ckpt 불필요
 infer/show.py              # 자기설명적 결과 뷰어 [스타일ref|정답|생성 cfg…] (--exclude-writers 로 폰트 제외)
 infer/matrix.py            # 스타일×텍스트 매트릭스 뷰어 / echo_compare.py  모델 나란히 비교
-infer/inkspire.py          # InkSpire one-shot 생성기+뷰어 (show.py 의 `--ckpt inkspire:…` 디스패치로 eval 공용)
 eval/htr_cer.py            # 생성 CER (한글 HTR 리더, 렌더바닥 ~0.00) ← 한글 주 지표
 eval/cer.py                # echo CER (easyocr — 한글은 saturated, 교차검증용)
 eval/echo_metrics.py       # echo 정량 (MSE/SSIM/LPIPS/FID) / all.py  통합 배터리
 # 모델
 models/eruku.py            # Emuru 모델 (forward/generate) — style-len 단위버그 수정됨
-models/inkspire.py         # InkSpire 이미지 모델: FLUX.1-Fill-dev + LoRA(r=32), R-APE, CFM loss, generate
-models/inkspire_layout.py  # InkSpire 레이아웃 모델: 글자 bbox masked CFM transformer (33M)
 models/                    # + OrigamiNet, VAE, HTR
 # 그 외
 experiments/               # 일회성 실험 스크립트 (vae_* / gen_* / jong_* / style_echo_check …)

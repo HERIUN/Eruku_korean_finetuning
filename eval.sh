@@ -3,7 +3,6 @@
 #
 #   ./eval.sh best [args...]      best 모델의 README 수치 재현 (한글/영어 CER, n=100)
 #   ./eval.sh cer     [args...]   한글 HTR CER  ← 한글 주 지표 (렌더 바닥 ~0.00)
-#                                 InkSpire 는 --ckpt inkspire:<lora_dir>[,<layout_ckpt>] (infer/show.py 디스패치)
 #                                 --style-ref-text "…" 면 style = 그 텍스트 렌더(one-shot), 기본은 echo
 #   ./eval.sh easyocr [args...]   easyocr CER (한글은 saturated, 교차검증용)
 #   ./eval.sh echo    [args...]   echo 정량 (MSE/SSIM/LPIPS/FID)

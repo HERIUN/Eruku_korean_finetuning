@@ -90,7 +90,7 @@ def main():
     ap.add_argument("--no-style-text", action=argparse.BooleanOptionalAction, default=False)
     ap.add_argument("--style-ref-text", default=None,
                     help="style ref 를 이 텍스트의 렌더로(one-shot 프로토콜, 예: gen_compare.STYLE_TEXT_KO). "
-                         "기본(None)=echo(style = 목표 텍스트 렌더) — InkSpire 엔 복사 과제가 되므로 둘 다 측정할 것")
+                         "기본(None)=echo(style = 목표 텍스트 렌더) — echo 는 복사 과제가 될 수 있어 둘 다 측정할 것")
     ap.add_argument("--out", default=str(HERE / "finetune_runs" / "htr_cer.txt"))
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--max-img-len", type=int, default=8192,

@@ -23,8 +23,10 @@ dependencies = [
     "accelerate>=1.0",
     "safetensors>=0.4",
     "pyyaml>=6",
-    "peft>=0.18",                # models/inkspire.py — FLUX LoRA
-    "prodigyopt>=1.1",           # train/inkspire.py — Prodigy optimizer (논문 레시피)
+    # InkSpire 재현(/data/work/dgkang/inkspire_korean)에서 쓰던 것. 코드는 옮겼지만 uv.lock 을
+    # 다시 풀 이유가 없어 선언만 남긴다. 이 repo 에서 import 하는 곳은 없다.
+    "peft>=0.18",
+    "prodigyopt>=1.1",
     # eval/echo_metrics.py 의 LPIPS / FID / BFID. 선언이 빠져 있어 2026-09-14 에 5개 런
     # 평가가 통째로 ModuleNotFoundError 로 죽었다 — 다시 빠뜨리지 말 것.
     "lpips>=0.1.4",              # LPIPS(AlexNet)

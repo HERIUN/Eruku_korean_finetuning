@@ -349,7 +349,7 @@ def require_optim_state(ck: dict, optimizer, allow_fresh: bool, what: str):
 
 
 def log_run_config(out_dir, args):
-    """run config 기록: out_dir/train_config.yml 에 run 히스토리 누적 (train/inkspire*.py 도 사용).
+    """run config 기록: out_dir/train_config.yml 에 run 히스토리 누적.
     CLI 덮어쓰기까지 반영된 최종 값 + 실제 적용된 샘플러 설정 전체를 남긴다."""
     cfg_path = Path(out_dir) / "train_config.yml"
     runs = (yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or []) if cfg_path.exists() else []
