@@ -1,8 +1,11 @@
 """원본 OnlineSplitFontSquare 파이프라인을 한 단계씩 실행하며 중간 이미지를 저장.
 회전/워핑이 왜 '폭으로 자르기'를 어긋나게 하는지 시각적으로 보여주기 위해
 회전/워핑 확률을 1.0으로 강제하고 각도도 크게 준 '과장 버전'을 함께 만든다.
+
+--ckpt 를 주면 마지막에 normal 버전의 09_style_part 를 조건으로 실제 생성까지 돌려
+10_generated.png 를 만든다 (안 주면 데이터 파이프라인만 — GPU/ckpt 불필요).
 """
-import os, random
+import argparse, os, random
 from pathlib import Path
 import numpy as np
 import torch
@@ -14,6 +17,13 @@ from custom_datasets.upstream.font_square.font_square_split import make_renderer
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "img_pipeline"
 OUT.mkdir(exist_ok=True)
+
+_ap = argparse.ArgumentParser()
+_ap.add_argument("--ckpt", default=None,
+                 help="주면 09_style_part 조건으로 생성해 10_generated.png 저장 "
+                      "(예: finetune_runs/eruku_corpusmax/checkpoint_step_044000.pth)")
+_ap.add_argument("--cfgs", nargs="+", type=float, default=[1.0, 1.5, 2.0])
+ARGS = _ap.parse_args()
 
 FONT = ROOT.parent / "assets/fonts_korean_v2/train/NanumGothic.ttf"
 BGS = ROOT.parent / "assets/backgrounds"
@@ -133,4 +143,36 @@ run(seed=7, out_prefix="long_normal", force=False, style_text=LONG_STYLE, gen_te
 run(seed=3, out_prefix="long_rot", force=True, style_text=LONG_STYLE, gen_text=LONG_GEN)  # 8°
 run(seed=1, out_prefix="long_rot3", style_text=LONG_STYLE, gen_text=LONG_GEN,
     rot_deg=[3.0, 3.0], rot_p=1.0)  # 실제 학습 최대치인 정확히 3°로 고정
+
+
+def gen_with_model(ckpt, cfgs):
+    """09_style_part(조건) + 09_gen_part(정답) 옆에 실제 생성 결과를 붙인 10_generated.png.
+
+    08_final_with_cut 은 '학습 입력'이지 모델 출력이 아니다 — 그 입력을 그대로 모델에 넣으면
+    뭐가 나오는지를 같은 그림에서 보여주기 위한 마지막 단계.
+    재현: CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. .venv/bin/python docs/_gen_pipeline_demo.py \
+              --ckpt finetune_runs/eruku_corpusmax/checkpoint_step_044000.pth
+    """
+    import cv2
+    from infer.show import load_model, load_style, gen_from_style, cell
+
+    d = ROOT / "img_pipeline_normal"
+    model, step = load_model(ckpt, "cuda")
+    print(f"[gen] ckpt step={step}")
+    cols = [cell(np.array(Image.open(d / "09_style_part.png").convert("L")),
+                 f"09_style_part (조건) '{STYLE_TEXT}'", 340, 72),
+            cell(np.array(Image.open(d / "09_gen_part.png").convert("L")),
+                 f"09_gen_part (정답) '{GEN_TEXT}'", 340, 72)]
+    style = load_style(d / "09_style_part.png")
+    for c in cfgs:
+        g = gen_from_style(model, style, STYLE_TEXT, GEN_TEXT, c, 220, "cuda", seed=0)
+        cols.append(cell(g, f"생성 cfg={c}", 340, 72))
+        print(f"[gen] cfg={c} -> {g.shape}")
+    cv2.imwrite(str(d / "10_generated.png"), np.hstack(cols))
+    print(f"saved {d / '10_generated.png'}")
+
+
+if ARGS.ckpt:
+    gen_with_model(ARGS.ckpt, ARGS.cfgs)
+
 print("\nDONE")

@@ -19,6 +19,7 @@ CUDA_VISIBLE_DEVICES=2 PYTHONPATH=. .venv/bin/python docs/_gen_module_io.py \
 ## 0. 한 줄 요약
 
 > **입력** = (스타일 이미지 + 스타일 전사 텍스트, 목표 텍스트) — 학습 시엔 목표 이미지(GT)도
+
 > **출력** = 목표 이미지의 **VAE latent 열(column) 시퀀스** + 각 열의 special 토큰 라벨
 > **loss** = latent MSE + special CE
 
@@ -26,40 +27,71 @@ Eruku는 픽셀을 직접 뱉지 않는다. 64px 높이 라인 이미지를 VAE�
 가로 방향 한 열(=원본 8px)을 **토큰 하나**로 보고 T5 디코더가 **다음 열을 autoregressive 하게 예측**한다.
 픽셀 이미지는 마지막에 VAE decoder가 만든다.
 
-![overview](eruku_io_overview.png)
+### 학습
 
-그림에서 읽을 것 — **두 정답의 출처가 다르다.** MSE 정답은 VAE encoder 의 **출력값**(latent 텐서
-그 자체, §5.1 ①), CE 정답은 VAE encoder 에 들어간 이미지의 **폭**(`*_img_len` 으로 기계적으로
-찍는 라벨, §4)이다. 가운데 빨간 줄이 그 둘의 공통 대상인 **디코더 입력 시퀀스**
-(`forward` 의 `decoder_inputs_embeds_vae`, `models/eruku.py:262`)이고, 이 시퀀스가 곧 GT 다 —
-입력에 `SOS` 를 앞에 붙이고 출력에서 마지막 한 칸을 버려 한 칸 밀린 정렬을 만든다(§5).
-줄에 `[SOS]` 가 없는 건 SOS 가 `query_emb` **이후** d_model 공간에서 붙기 때문이다(`:291`).
+![학습 I/O](train_io.png)
 
-**범례의 빨강/회색은 MSE 기준이다.** MSE 는 `specials == 2` 인 style/gen latent 열만 보고
-SOG/EOG/pad 는 마스크로 뺀다(`:314`). 반면 **CE 는 마스크가 없어 전 위치에 걸린다**(`:312`) —
-회색 구간도 `SOG`/`EOG` 라벨로 감독되고, 패딩까지 `EOG` 로 학습된다(`pad_sequence(padding_value=1)`,
-`:234`). 즉 회색은 "감독 안 함" 이 아니라 "**latent 값 대신 라벨로만** 감독" 이다.
+**두 정답의 출처가 다르다.** MSE 정답은 VAE encoder 의 **출력값**(latent 텐서 그 자체, §5.1 ①),
+CE 정답은 VAE encoder 에 들어간 이미지의 **폭**(`*_img_len` 으로 기계적으로 찍는 라벨, §4)이다.
+빨간 줄이 그 둘의 공통 대상인 **디코더 타깃 시퀀스**(`forward` 의 `decoder_inputs_embeds_vae`,
+`models/eruku.py:278`)고, 이 시퀀스가 곧 GT 다.
 
-그리고 되먹임 점선이 `query_emb` 지점으로 합류하는 것도 실제 코드 그대로다 —
-학습의 style/gen latent(`models/eruku.py:274`), 추론의 style prefix(`:428`), 추론의 자기 출력
-되먹임(`:496`)이 **같은 `Linear(8, 1024)` 하나**를 탄다. 그래서 `t5_to_vae` 의 출력이 VAE latent 와
-같은 8차원 공간이어야 한다(§6).
+**타깃 줄에 `[SOS]` 가 없는 건 SOS 가 타깃이 아니기 때문이다.** 디코더 *입력* 은 `[SOS]` 를 앞에
+붙여 길이 `1+W` 가 되고(`:307`), 출력에서 마지막 한 칸을 버려(`output.logits[:, :-1]`, `:324`)
+길이 `W` 의 타깃과 맞춘다 — autoregressive 한 칸 밀림. `h₀` 는 SOS 만 보고 첫 열을 맞히고,
+마지막 `h_W`(=EOG 를 먹은 위치)는 맞힐 게 없어 버려진다(§5). **자기회귀 루프는 없다** —
+teacher forcing 이라 forward 한 번으로 전 위치를 동시에 예측한다.
 
-오른쪽 아래 `pixel crop [SOG+1:]` 는 **순서**가 핵심이다. VAE decoder 에는 style prefix 까지
-**붙여서** 넣고(`:507`), 자르는 건 그 다음 **픽셀 공간**에서다(`infer/show.py:100`). latent 에서
-미리 자르면 생성분 첫 열이 왼쪽 문맥을 잃는다. `+1` 은 SOG 도 latent 한 열(=8px)을 차지하기
-때문이고, 빼먹으면 결과 왼쪽에 8px 이 남는다.
+**빨강/회색은 MSE 기준이다.** MSE 는 `specials == 2` 인 style/gen latent 열만 보고 SOG/EOG/pad 는
+마스크로 뺀다(`:329`). 반면 **CE 는 마스크가 없어 전 위치에 걸린다**(`:327`) — 회색 구간도
+`SOG`/`EOG` 라벨로 감독되고, 패딩까지 `EOG` 로 학습된다(`pad_sequence(padding_value=1)`, `:255`).
+즉 회색은 "감독 안 함" 이 아니라 "**latent 값 대신 라벨로만** 감독" 이다. **style latent 도 빨강**
+이라는 점에 주의 — style 열도 `specials == 2` 라 MSE 를 받는다(`:220`). 예측 줄의 `[??]` 가 그
+마스크된 자리이고, 거기서도 latent 이 나오지만 아무도 안 본다.
 
-> 그림이 생략한 것 둘: (1) 되먹임 루프의 종료 신호 `until EOG` 는 latent 가 아니라 위쪽
-> **special head 예측**에서 나온다(SOG 를 뽑으면 latent 대신 학습된 `sog` 임베딩이 들어간다,
-> `:494-496`). (2) 입력에는 `style_img_len` / `gen_img_len` / `max_img_len` 도 함께 들어가며,
-> 이 셋이 곧 CE 정답을 만드는 재료다(§2).
+### 추론
+
+![추론 I/O](inference_io.png)
+
+디코더에 넣는 건 style prefix 뿐이고, 그림의 두 줄이 그 분기다:
+
+```
+[SOS][style latents][SOG]   : style_text 가 빈 문자열일 때 — 경계를 미리 박아준다 (eruku.py:450-454)
+[SOS][style latents]        : style_text 가 있을 때 — SOG 를 모델이 직접 예측해야 한다
+```
+
+후자에서 모델은 SOG 를 내기 전에 **style 텍스트를 한 번 더 이어 그린다**(echo,
+[`EXPERIMENTS.md`](EXPERIMENTS.md) §1). 그래서 크롭 기준이 고정 style 폭이 아니라 첫 SOG 여야
+한다 — 릴리즈 클래스가 고정 오프셋으로 자르다 echo 를 남긴 게 [`RELEASE.md`](RELEASE.md) 의
+그 버그다(2026-08 수정 완료).
+
+`vae_decoder_output[(SOG+1)*8:]` 는 **순서와 단위**가 핵심이다. VAE decoder 에는 style prefix 까지
+**붙여서** 넣고(`:523`), 자르는 건 그 다음 **픽셀 공간**에서다(`infer/show.py:105-108`). latent 에서
+미리 자르면 생성분 첫 열이 왼쪽 문맥을 잃는다. `+1` 은 SOG 도 latent 한 열을 차지하기 때문이고,
+**`*8` 은 그 한 열이 원본 8px 이라서다** — 빼먹으면(`[SOG+1:]`) 결과 왼쪽에 7px 이 남는다.
+
+**오른쪽 끝(EOG 열)은 자르지 않는다.** EOG latent 은 MSE 감독을 안 받지만, 그 8px 에 실제로 찍히는
+건 VAE 수용영역이 8px 보다 넓어서 **직전 실제 열의 잉크가 번져 나온 꼬리**다. 잘라내면 마지막 글자의
+오른쪽 끝이 깎인다(실측: 5개 텍스트에서 EOG 열 잉크량 0.000~0.098 vs 직전 열 0.044~0.379).
+
+> 그림이 생략한 것: 종료 신호 `until EOG` 는 latent 가 아니라 **special head 예측**에서 나오고,
+> SOG 를 뽑은 스텝만 latent 대신 학습된 `sog` 임베딩이 입력된다(`:510-512`).
+
+### 두 그림의 공통점
+
+`query_emb` 는 **디코더 입력 전용**이고 셋이 같은 `Linear(8, 1024)` 하나를 탄다 — 학습의 style/gen
+latent(`models/eruku.py:290`), 추론의 style prefix(`:444`), 추론의 자기 출력 되먹임(`:512`).
+그래서 `t5_to_vae` 의 출력이 VAE latent 와 같은 8차원 공간이어야 한다(§6). 인코더 쪽은 별개 경로라
+`query_emb` 를 안 탄다 — 텍스트는 `T5.shared` 임베딩으로 들어가 cross-attention K/V 가 된다.
+
+입력에는 `style_img_len` / `gen_img_len` / `max_img_len` 도 함께 들어가며, 이 셋이 곧 CE 정답을
+만드는 재료다(§2).
 
 ---
 
 ## 1. 학습 모듈이 요구하는 입력
 
-`custom_datasets.korean.split.split_collate` (`custom_datasets/korean/split.py:207`) 가 만드는 배치 dict가
+`custom_datasets.korean.split.split_collate` (`custom_datasets/korean/split.py:363`) 가 만드는 배치 dict가
 학습 루프가 요구하는 전부다. 외부 데이터로 갈아끼우려면 **이 6개 키만 맞추면 된다.**
 
 | 키 | 타입 | 설명 |
@@ -93,7 +125,7 @@ gen_text   = "곳 Pierro… 껄"                gen_img   [3, 64, 379]   gen_img
 **샘플 하나만 놓고 보면 얻을 수 있다.** 실제로 `split_collate` 가 하는 일이 정확히 그거다:
 
 ```python
-"style_img_len": [b["style_img"].shape[-1] for b in batch],   # custom_datasets/korean/split.py:214
+"style_img_len": [b["style_img"].shape[-1] for b in batch],   # custom_datasets/korean/split.py:370
 ```
 
 문제는 **그 시점이 배치로 묶이기 직전**이라는 것이다. 모델에 도착할 땐 이미 늦는다.
@@ -101,8 +133,8 @@ gen_text   = "곳 Pierro… 껄"                gen_img   [3, 64, 379]   gen_img
 ### (1) 배치 패딩이 폭 정보를 지운다 — 그것도 "복구 불가능하게"
 
 `get_model_inputs` 는 맨 처음 `pad_images(...)` 로 배치 안의 서로 다른 폭을 최대폭에 맞춘다
-(`models/eruku.py:198`). 그런데 **패딩 값이 `1`**(= 정규화 후 흰색, `pad_images` 기본값,
-`models/eruku.py:56`)이다. 글자 사이 여백도 흰색이다. 즉 **패딩과 실제 여백이 픽셀값으로 구분되지 않는다.**
+(`models/eruku.py:184`). 그런데 **패딩 값이 `1`**(= 정규화 후 흰색, `pad_images` 기본값,
+`models/eruku.py:39`)이다. 글자 사이 여백도 흰색이다. 즉 **패딩과 실제 여백이 픽셀값으로 구분되지 않는다.**
 
 ![why len](img_module_io/02_why_len.png)
 
@@ -114,7 +146,7 @@ gen_text   = "곳 Pierro… 껄"                gen_img   [3, 64, 379]   gen_img
 
 ### (2) 추론 땐 `gen_img` 자체가 없다
 
-생성 시 호출은 이렇다 (`infer/show.py:254`):
+생성 시 호출은 이렇다 (`infer/show.py:294`):
 
 ```python
 mi = model.get_model_inputs([style_img], None, style_len=W, gen_len=None, max_img_len=2048)
@@ -132,7 +164,7 @@ mi = model.get_model_inputs([style_img], None, style_len=W, gen_len=None, max_im
 ### (4) 길이는 폭이 아니라 "예산(budget)" 으로도 쓰인다
 
 `get_model_inputs` 안에서 `sl`/`gl` 은 그대로 쓰이지 않고 clamp된다
-(`models/eruku.py:224`, `:240`):
+(`models/eruku.py:215`, `:228`):
 
 ```python
 sl = max(64, min(sl, style_img_embeds.shape[-1] * 8, max_img_len // 2))   # style 은 예산의 절반까지
@@ -170,7 +202,7 @@ gl = max(64, min(gl, gen_img_embeds.shape[-1] * 8, remaining))
 `get_model_inputs` 가 `@torch.no_grad()` 인 이유도 같다 — VAE는 동결이라 텐서 전처리일 뿐이고,
 텍스트는 학습되는 embedding을 타야 하므로 `forward` 안에 있어야 한다.
 
-텍스트 인코딩 (`models/eruku.py:284`):
+텍스트 인코딩 (`models/eruku.py:274`):
 
 ```python
 pairs = [f"{style}<sog>{gen}" for style, gen in zip(style_text, gen_text)]
@@ -184,7 +216,7 @@ style과 gen 텍스트를 `<sog>` 로 이어 **한 문자열**로 넣는다. 디
 
 ## 4. `get_model_inputs` 가 만드는 것 (모델이 실제로 받는 시퀀스)
 
-`models/eruku.py:191`. 반환 3개:
+`models/eruku.py:171`. 반환 3개:
 
 | 키 | shape | 내용 |
 |---|---|---|
@@ -206,7 +238,7 @@ style과 gen 텍스트를 `<sog>` 로 이어 **한 문자열**로 넣는다. 디
 
 ## 5. 출력 (a) — 학습: `forward()`
 
-`models/eruku.py:295`. 호출과 반환:
+`models/eruku.py:278`. 호출과 반환:
 
 ```python
 losses, pred_latent = model.forward(
@@ -233,7 +265,7 @@ losses, pred_latent = model.forward(
 ![teacher forced](img_module_io/04_teacher_forced.png)
 
 > `pred_latent[..., i]` 는 입력 `x_i` 의 예측이라 **GT와 같은 인덱스로 잘라야 짝이 맞는다.**
-> 디코더 입력에 `sos` 를 붙이고 `output.logits[:, :-1]` 을 쓰기 때문에 (`models/eruku.py:341`)
+> 디코더 입력에 `sos` 를 붙이고 `output.logits[:, :-1]` 을 쓰기 때문에 (`models/eruku.py:324`)
 > 반환 텐서는 이미 정렬돼 있다 — 따로 shift 할 필요가 없다.
 
 **1)과 2)의 선명도가 다른 게 정상이다.** 2)는 1)을 그대로 쓴 게 아니라 **VAE를 한 번 왕복한 것**
@@ -251,7 +283,7 @@ losses, pred_latent = model.forward(
 
 > ⚠️ 눈에 보이는 열화의 **대부분은 VAE의 결정적 재구성 한계가 아니라 KL posterior 샘플링
 > 노이즈**다(9.3배 차이). `_img_encode` 는 `.latent_dist.sample()` 을 쓰는데
-> (`models/eruku.py:188`, 원본 Emuru/LDM 관례) **repo의 VAE 측정 스크립트는 전부
+> (`models/eruku.py:168`, 원본 Emuru/LDM 관례) **repo의 VAE 측정 스크립트는 전부
 > `.mode()`** 를 쓴다(`docs/_vae_capacity.py:41`, `experiments/common.py:62`, …).
 > 즉 문서화된 "VAE 한글 재구성 한계" 수치는 **모델이 실제로 받는 것보다 깨끗한 경로**를 잰 값이다.
 >
@@ -294,7 +326,7 @@ MSE 쪽은 `specials!=2` 라 패딩이 자동 제외된다.
 
 ## 6. 출력 (b) — 추론: `generate()` / `generate_batch()`
 
-`models/eruku.py:419`. `gen_img` 없이 **style prefix만** 넣고 EOG가 나올 때까지 열을 하나씩 뽑는다.
+`models/eruku.py:400`. `gen_img` 없이 **style prefix만** 넣고 EOG가 나올 때까지 열을 하나씩 뽑는다.
 
 ```python
 mi = model.get_model_inputs([style_img], None, style_len=W, gen_len=None, max_img_len=2048)
@@ -337,7 +369,7 @@ model.dropout_probability = 0.05  # CFG 용 text dropout
 model.drop_text = True
 
 for sample in dl:
-    sample, dropped = filter_no_truncation(sample, max_img_len)   # train/core.py:139, truncation 금지 정책
+    sample, dropped = filter_no_truncation(sample, max_img_len)   # train/core.py:628, truncation 금지 정책
     mi = model.get_model_inputs(sample["style_img"], sample["gen_img"],
                                 sample["style_img_len"], sample["gen_img_len"], max_img_len)
     losses, _ = model.forward(decoder_inputs_embeds_vae=mi["decoder_inputs_embeds"].cuda(),
@@ -347,7 +379,7 @@ for sample in dl:
     ...
 ```
 
-실제 루프(grad accum, resume, val, 샘플 덤프, config 기록 포함)는 `train/core.py:251~` 참고.
+실제 루프(grad accum, resume, val, 샘플 덤프, config 기록 포함)는 `train/core.py:372~` 참고.
 
 ### 학습되는 파라미터 / 동결되는 것
 
@@ -367,5 +399,6 @@ for sample in dl:
 - [`PIPELINE_STEP_BY_STEP.md`](PIPELINE_STEP_BY_STEP.md) — 렌더→증강→split 단계별 이미지
 - [`STYLE_LEN_BUG.md`](STYLE_LEN_BUG.md) — `style_len` 픽셀↔latent 단위 버그
 - [`VAE_ROBUSTNESS.md`](VAE_ROBUSTNESS.md) — 출력 품질의 하드 상한(VAE 재구성 한계)
-- 하이퍼파라미터 전체 목록: `train/core.py:make_parser()` (라인 42~115),
-  레시피는 `train/phase1.py:17` / `train/phase2.py:20` / `train/korean_from_en.py:23`
+- 하이퍼파라미터 전체 목록: `train/core.py:make_parser()` (라인 33~135),
+  레시피는 `configs/phase1.yaml` / `configs/phase2.yaml` / `configs/korean_from_en.yaml`
+  (`train/phase*.py` 는 해당 yaml 을 가리키는 얇은 래퍼다)
