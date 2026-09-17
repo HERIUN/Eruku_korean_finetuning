@@ -432,9 +432,14 @@ class Emuru(torch.nn.Module):
         text_input_ids = _ids.to(device)
         text_mask = _am.to(device)
 
-        use_cfg = cfg_scale != 1.0
+        # drop_text 가 꺼져 있으면 uncond == cond 라 CFG 항 (cond-uncond) 이 정확히 0 이 된다
+        # (실측 max|cond-uncond| = 0.0) → cfg_scale 을 뭘 줘도 결과는 cfg=1.0 과 같은데
+        # 배치만 [uncond;cond] 로 2배가 된다. 그래서 여기서 같이 판정해 헛연산을 막는다.
+        # drop_text 는 본래 학습 플래그(train/core.py: text_dropout>0)이자
+        # "uncond_embedding 이 학습됐는가" = "이 ckpt 가 CFG 를 지원하는가" 를 뜻한다.
+        use_cfg = cfg_scale != 1.0 and self.drop_text
         cond_text_embeds = self.T5.shared(text_input_ids)
-        if use_cfg and self.drop_text:
+        if use_cfg:
             uncond_text_embeds = torch.zeros_like(cond_text_embeds) + self.uncond_embedding.weight
         else:
             uncond_text_embeds = cond_text_embeds
@@ -464,12 +469,14 @@ class Emuru(torch.nn.Module):
             prefix[el, pmax - plens[el]:] = p
             dec_mask[el, pmax - plens[el]:] = 1
 
+        if cfg_scale != 1.0 and self.drop_img:
+            # 원본은 매 스텝 디코더 입력 '전체'를 uncond 로 갈아끼웠는데, KV 캐시 경로는
+            # prefix 를 한 번 넣고 이후엔 새 토큰만 넣으므로 그 치환을 재현할 수 없다.
+            # 이 repo 는 drop_img 를 켜지 않는다(항상 False) — 조용히 갈리느니 막는다.
+            # (use_cfg 가 아니라 cfg_scale 로 판정: drop_text 가 꺼져 있어도 요청은 요청이다)
+            raise NotImplementedError("generate_batch 는 drop_img=True + CFG 를 지원하지 않는다")
+
         if use_cfg:
-            if self.drop_img:
-                # 원본은 매 스텝 디코더 입력 '전체'를 uncond 로 갈아끼웠는데, KV 캐시 경로는
-                # prefix 를 한 번 넣고 이후엔 새 토큰만 넣으므로 그 치환을 재현할 수 없다.
-                # 이 repo 는 drop_img 를 켜지 않는다(항상 False) — 조용히 갈리느니 막는다.
-                raise NotImplementedError("generate_batch 는 drop_img=True + CFG 를 지원하지 않는다")
             enc_embeds = torch.cat([uncond_text_embeds, cond_text_embeds], dim=0)
             enc_mask = torch.cat([text_mask, text_mask], dim=0)
             dec_in = torch.cat([prefix, prefix], dim=0)
