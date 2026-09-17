@@ -9,7 +9,7 @@ CLI 테스트:
   python custom_datasets/korean/split.py --n 8 --style 1 8 --gen 2 16 --out /tmp/ksplit
 """
 from __future__ import annotations
-import sys, random, json, argparse
+import sys, math, random, json, argparse
 from pathlib import Path
 import numpy as np, torch, cv2
 from PIL import Image, ImageDraw, ImageFont
@@ -57,7 +57,12 @@ class KoreanSplitFontSquare(OnlineSplitFontSquare):
                     if bg_dir.is_dir() else list(backgrounds))
         self.render_tf = FTN.RenderImage(self.fonts, renderers=renderers, pad=20)
         # 단계별 transform (Compose 대신 명시 호출): 공유 단계(블러·굵기)는 RNG 스냅샷으로 둘에 동일 적용.
-        self.t_rotate = FTN.RandomRotation(3, fill=1, p=0.5)           # style 만(약한 기울기). warp 는 제거됨.
+        # style 만(약한 기울기). warp 는 제거됨.
+        # expand=True: 기본값(False)은 캔버스를 고정해 기운 줄의 양끝을 캔버스 밖으로 밀어낸다
+        # → 흰색으로 잘리고 TailorTensor 가 그 흰 영역을 크롭해 글자가 소실된다
+        #   (3° 고정 실측 잉크 소실: 284px 0% / 1925px 12.9% / 3829px 47.8%).
+        self.ROT_DEG = 3
+        self.t_rotate = FTN.RandomRotation(self.ROT_DEG, fill=1, p=0.5, expand=True)
         self.t_blur = FTN.GaussianBlur(kernel_size=3, p=0.5)          # ★ 공유(선명도 매칭)
         self.t_bg = FTN.RandomBackground(bg_paths, white_p=0.1)        # style 만(종이배경)
         self.t_tailor = FTN.TailorTensor(pad=3)
@@ -91,7 +96,13 @@ class KoreanSplitFontSquare(OnlineSplitFontSquare):
         g = self.render_tf({'text': gen_text, 'font_id': font_id})
 
         # style 만: 약한 기울기(회전). warp(TPS 휨) 는 제거. gen 은 곧은 글자.
-        s = self.t_rotate(s)
+        # ponytail: 안전폭(h/sin θ) 초과면 회전 자체를 건너뛴다. expand=True 가 잘림은 막지만
+        # 기운 긴 줄은 잉크 bbox 가 높아지고 ImgResize(64) 가 높이로 정규화하므로 글자가 쪼그라든다
+        # (3° 실측 최종폭: 1925px 1155→757, 3829px 1923→935). 긴 style 은 소수라 그냥 곧게 둔다.
+        # 각도를 폭에 반비례시키는 게 더 곱지만 필요해지면 그때.
+        _h, _w = s['img'].shape[-2], s['img'].shape[-1]
+        if _w <= _h / math.sin(math.radians(self.ROT_DEG)):
+            s = self.t_rotate(s)
 
         # ★ 공유: GaussianBlur — 같은 결정/시그마를 style·gen 에 (선명도 매칭)
         st = self._snap(); s = self.t_blur(s); self._restore(st); g = self.t_blur(g)
