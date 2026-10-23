@@ -32,13 +32,15 @@ def run_one(label, ckpt, n, english, kind, coherent=False, fonts_dir=None, max_w
     txt = out.read_text(encoding="utf-8") if out.exists() else ""
     m = re.search(r"전체\s+([\d.]+)\s+([\d.]+)\s+([\d.-]+)", txt)
     if kind == "echo":
-        # echo 전체행: MSE SSIM LPIPS  (FID/BFID 는 별도 줄)
+        # echo 전체행: MSE SSIM LPIPS  (FID/BFID/HWD 는 별도 줄)
         vals = re.search(r"전체\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)", txt)
         fid = re.search(r"\nFID\(.*?:\s*([\d.-]+)", txt)
         bfid = re.search(r"BFID\(.*?:\s*([\d.-]+)", txt)
+        hwd = re.search(r"\nHWD\(.*?:\s*([\d.na-]+)", txt)
         return {"MSE": vals.group(1), "SSIM": vals.group(2), "LPIPS": vals.group(3),
                 "FID": fid.group(1) if fid else "-",
-                "BFID": bfid.group(1) if bfid else "-"} if vals else {}
+                "BFID": bfid.group(1) if bfid else "-",
+                "HWD": hwd.group(1) if hwd else "-"} if vals else {}
     else:
         # CER 전체행: gen GT gap OCRsim
         sim = re.search(r"전체\s+[\d.]+\s+[\d.]+\s+[\d.-]+\s+([\d.-]+)", txt)
@@ -77,13 +79,13 @@ def main():
     lines = [f"=== 통합 평가 (n={args.n}, echo+CER, seen 폰트) ===",
              "(MSE·LPIPS·FID·CER ↓ 낮을수록 / SSIM ↑)"]
     for lang in args.langs:
-        lines.append(f"\n[{lang.upper()}]  (MSE·LPIPS·FID·BFID·CER↓ / SSIM·OCRsim↑)")
+        lines.append(f"\n[{lang.upper()}]  (MSE·LPIPS·FID·BFID·HWD·CER↓ / SSIM·OCRsim↑)")
         lines.append(f"{'model':14s} {'MSE':>7} {'SSIM':>7} {'LPIPS':>7} {'FID':>7} "
-                     f"{'BFID':>7} {'CER':>7} {'OCRsim':>7}")
+                     f"{'BFID':>7} {'HWD':>7} {'CER':>7} {'OCRsim':>7}")
         for label, _ in models:
             d = rows[label].get(lang, {})
             lines.append(f"{label:14s} {d.get('MSE','-'):>7} {d.get('SSIM','-'):>7} "
-                         f"{d.get('LPIPS','-'):>7} {d.get('FID','-'):>7} {d.get('BFID','-'):>7} "
+                         f"{d.get('LPIPS','-'):>7} {d.get('FID','-'):>7} {d.get('BFID','-'):>7} {d.get('HWD','-'):>7} "
                          f"{d.get('CER','-'):>7} {d.get('OCRsim','-'):>7}")
     report = "\n".join(lines)
     print("\n" + report)

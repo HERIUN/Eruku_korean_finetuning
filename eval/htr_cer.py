@@ -10,9 +10,10 @@
 사용: CUDA_VISIBLE_DEVICES=2 python eval/htr_cer.py --ckpt <ckpt> [--vae-checkpoint <vae>] [--english] --n 100
 """
 from __future__ import annotations
-import argparse, random, re, sys
+import argparse, json, random, re, sys
 from pathlib import Path
 import numpy as np, torch, torch.nn.functional as F
+from PIL import Image
 
 HERE = Path(__file__).resolve().parents[1]   # 저장소 루트
 sys.path.insert(0, str(HERE))
@@ -87,11 +88,14 @@ def main():
     ap.add_argument("--vae-only", action=argparse.BooleanOptionalAction, default=False,
                     help="T5 생성 대신 GT 를 VAE 로만 왕복(encode→decode)시켜 읽는다 = 이 VAE 로 "
                          "도달 가능한 CER 하한. 어떤 T5 도 이보다 좋아질 수 없다(docs/EXPERIMENTS.md §3)")
-    ap.add_argument("--no-style-text", action=argparse.BooleanOptionalAction, default=False)
+    ap.add_argument("--no-style-text", action="store_true")
     ap.add_argument("--style-ref-text", default=None,
                     help="style ref 를 이 텍스트의 렌더로(one-shot 프로토콜, 예: gen_compare.STYLE_TEXT_KO). "
                          "기본(None)=echo(style = 목표 텍스트 렌더) — echo 는 복사 과제가 될 수 있어 둘 다 측정할 것")
     ap.add_argument("--out", default=str(HERE / "finetune_runs" / "htr_cer.txt"))
+    ap.add_argument("--dump-dir", default=None,
+                    help="생성/GT 이미지를 <dir>/gen, <dir>/gt 에 transcriptions.json 과 함께 저장 "
+                         "→ 다른 리더로 재채점(eval/ppocr_rec.py)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--max-img-len", type=int, default=8192,
                     help="style prefix 예산(px). style 은 이 값의 절반까지만 쓰인다. "
@@ -110,6 +114,7 @@ def main():
     texts = build_texts(args.n, rng, english=args.english, coherent=args.coherent, max_words=args.max_words)
 
     per = []  # (nw, cer_gen, cer_gt, ink, font_stem)
+    dumped = {}
     done = 0
     for i_t, text in enumerate(texts):
         rng.shuffle(fonts)
@@ -144,6 +149,11 @@ def main():
         cgt = char_cer([norm(hyp_gt)], [norm(text)])
         ink = float((gen < 200).mean())
         per.append((len(text.split()), cg, cgt, ink, fp.stem)); done += 1
+        if args.dump_dir:
+            for sub, a in (("gen", gen), ("gt", gt)):
+                (Path(args.dump_dir) / sub).mkdir(parents=True, exist_ok=True)
+                Image.fromarray(a).save(Path(args.dump_dir) / sub / f"{i_t:05d}.png")
+            dumped[f"{i_t:05d}.png"] = text
         if done % 20 == 0:
             print(f"  {done}/{args.n} ... (누적 gen CER {np.mean([p[1] for p in per]):.3f})")
 
@@ -185,6 +195,9 @@ def main():
             lines.append(f"{f_[:14]:14s} {md:8.3f} {ra:7.1%} {bl:7.1%}  (n={len(rows)})")
     report = "\n".join(lines)
     print("\n" + report)
+    for sub in ("gen", "gt") if args.dump_dir else ():
+        (Path(args.dump_dir) / sub / "transcriptions.json").write_text(
+            json.dumps(dumped, ensure_ascii=False), encoding="utf-8")
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)
     Path(args.out).write_text(report, encoding="utf-8")
     print(f"\nsaved {args.out}")

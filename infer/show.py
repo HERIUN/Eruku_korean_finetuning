@@ -82,11 +82,11 @@ def render_in_font(font_path, text, size=72, pad=14):
     return arr
 
 
-def style_tensor(arr, h=64):
-    """라인이미지 배열 → style 텐서 [3,h,W] [-1,1] (BILINEAR h-리사이즈)."""
+def style_tensor(arr, h=64, resample=Image.BILINEAR):
+    """라인이미지 배열 → style 텐서 [3,h,W] [-1,1] (기본 BILINEAR h-리사이즈)."""
     img = Image.fromarray(arr).convert("RGB")
     w, hh = img.size
-    img = img.resize((max(1, int(w * (h / hh))), h), Image.BILINEAR)
+    img = img.resize((max(1, int(w * (h / hh))), h), resample)
     return T.Compose([T.ToTensor(), T.Normalize((0.5,)*3, (0.5,)*3)])(img)
 
 
@@ -108,8 +108,12 @@ def crop_gen(img, special, style_px):
         g = img[:, :, start:] if img.shape[-1] > start else img[:, :, -8:]
     else:
         g = img[:, :, style_px:] if img.shape[-1] > style_px else img
-    return np.array(torchvision.transforms.ToPILImage()(
-        ((g + 1) / 2).clamp(0, 1).cpu()).convert("L"))
+    return to_u8(g)
+
+
+def to_u8(img):
+    """[c,h,w] [-1,1] → [H,W] uint8."""
+    return np.array(torchvision.transforms.ToPILImage()(((img + 1) / 2).clamp(0, 1).cpu()).convert("L"))
 
 
 def gen_arr(model, dec, ref_text, seed_text, cfg, max_new, style_px):
@@ -120,8 +124,9 @@ def gen_arr(model, dec, ref_text, seed_text, cfg, max_new, style_px):
     """
     with torch.no_grad():
         img, special = model.generate(decoder_inputs_embeds_vae=dec, style_text=[ref_text],
-                                      gen_text=[seed_text], cfg_scale=cfg, max_new_tokens=max_new)
-    return crop_gen(img[0], special, style_px)
+                                      gen_text=[seed_text], cfg_scale=cfg, max_new_tokens=max_new,
+                                      gen_only="ctx")
+    return to_u8(img[0])
 
 
 @torch.no_grad()
@@ -155,8 +160,8 @@ def gen_from_style_batch(model, style_imgs, style_texts, gen_texts, cfg, max_new
     if seed is not None:
         torch.manual_seed(seed)
     imgs, specials = model.generate_batch(dec, style_texts, gen_texts, cfg_scale=cfg,
-                                          max_new_tokens=max_new, prefix_lens=lens)
-    return [crop_gen(im, sp, el * 8) for im, sp, el in zip(imgs, specials, lens)]
+                                          max_new_tokens=max_new, prefix_lens=lens, gen_only="ctx")
+    return [to_u8(im) for im in imgs]
 
 
 def _hf_release_state(repo):
@@ -168,7 +173,7 @@ def _hf_release_state(repo):
 
     ★ `docs/RELEASE.md` 의 style prefix 크롭 규약 차이는 릴리즈 **클래스**
       (`modeling_eruku.generate_handwriting` 가 내부에서 자르는 동작) 얘기라 여기선 무관하다.
-      여기서 쓰는 건 가중치뿐이고 크롭은 로컬 규약(`crop_gen`, special 첫 SOG 기준)으로 돈다.
+      여기서 쓰는 건 가중치뿐이고 gen 영역은 로컬 규약(`generate_batch(gen_only="ctx")`, style+이미지 토큰+EOG 디코딩(SOG 만 제외) 후 첫 SOG 앞 열 크롭)으로 뽑는다.
     """
     from huggingface_hub import hf_hub_download
     from safetensors.torch import load_file
@@ -254,7 +259,7 @@ def main():
                     help="montage 각 칸(셀)의 세로 픽셀. 한 줄 라인 이미지 높이에 맞춤 "
                          "(시각화 전용, 모델 입출력 해상도와 무관)")
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    ap.add_argument("--no-style-text", action=argparse.BooleanOptionalAction, default=False,
+    ap.add_argument("--no-style-text", action="store_true",
                     help="style_text(ref 전사)를 주지 않고 빈 문자열로 생성 (style 이미지만으로 "
                          "스타일 파악). 줬을 때와 비교용. 컬럼 라벨에 (no-stext) 표시")
     ap.add_argument("--exclude-writers", nargs="*", default=["UlsanJunggu"],

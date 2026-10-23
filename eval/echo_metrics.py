@@ -9,6 +9,10 @@ style==gen 일 때만 픽셀/구조 지표가 유효하다(모델이 그 글자�
   SSIM  : 구조적 유사도 ↑ (skimage)
   LPIPS : 지각적 거리 ↓ (lpips, AlexNet)
   FID   : 분포 거리 ↓ (pytorch-fid InceptionV3, 전체 셋 vs 정답 셋)
+  BFID  : Otsu 이진화 후 FID ↓ (hwd 패키지)
+  HWD   : 폰트(=필기자)별 VGG16 특징 평균 간 유클리드 거리의 평균 ↓ (hwd 패키지, 스타일 충실도)
+          필기자별 거리라서 폰트당 여러 샘플이 필요 → --per-font(기본 5): n/per_font 개 폰트를 뽑아 돌려씀.
+          --per-font 1 이면 예전처럼 텍스트마다 무작위 폰트(과거 수치 재현용, HWD 는 샘플 1개짜리라 노이즈 큼).
 길이 버킷(단문 1~3 / 중문 4~8 / 장문 9~15)별로도 MSE/SSIM/LPIPS 분해 보고.
 
 사용:
@@ -115,7 +119,9 @@ def main():
     ap.add_argument("--max-new-tokens", type=int, default=320)
     ap.add_argument("--max-words", type=int, default=15, help="문장 최대 어절수(1~max, 올리면 긴 문장 robustness)")
     ap.add_argument("--seed", type=int, default=0)
-    ap.add_argument("--no-style-text", action=argparse.BooleanOptionalAction, default=False)
+    ap.add_argument("--per-font", type=int, default=5,
+                    help="폰트당 샘플 수(HWD 용). 1 = 예전 방식(텍스트마다 무작위 폰트, 과거 수치 재현)")
+    ap.add_argument("--no-style-text", action="store_true")
     ap.add_argument("--english", action=argparse.BooleanOptionalAction, default=False, help="영어 전용 텍스트로 평가(pretrained 공정비교용)")
     ap.add_argument("--coherent", action=argparse.BooleanOptionalAction, default=False, help="랜덤단어 대신 실제 문장 세그먼트(OCR 신뢰성↑)")
     ap.add_argument("--out", default=str(HERE / "finetune_runs" / "echo_metrics.txt"))
@@ -139,18 +145,24 @@ def main():
 
     fonts = sorted(p for p in Path(args.fonts_dir).glob("*.[ot]tf"))   # otf 도 (custom_hw)
     texts = build_texts(args.n, rng, english=args.english, coherent=args.coherent, max_words=args.max_words)
+    # HWD 는 필기자별 거리 → 폰트 풀을 n/per_font 개로 줄여 i % len(pool) 로 돌린다
+    # (연속 배정하면 폰트마다 어절수 구간이 몰리므로 interleave).
+    pool = rng.sample(fonts, min(len(fonts), -(-args.n // args.per_font))) if args.per_font > 1 else None
 
     feats_gt, feats_gen = [], []
-    # BFID(HWD 공식): Otsu 이진화 후 FID — 배경 무시, 폰트충실도. gen/gt 를 임시폴더에 저장 후 일괄 계산.
+    # BFID/HWD(hwd 패키지): gen/gt 를 임시폴더 fake|real/<폰트>/ 에 저장 후 일괄 계산.
+    # FolderDataset 은 상위 폴더명을 필기자로 본다(BFID 는 무시, HWD 는 폰트별로 묶음).
     import shutil, tempfile
     bdir = Path(tempfile.mkdtemp(prefix="bfid_"))
-    (bdir / "fake" / "w").mkdir(parents=True); (bdir / "real" / "w").mkdir(parents=True)
     per = []   # (nw, mse, ssim, lpips)
     done = 0
     for i_t, text in enumerate(texts):
         # 이 텍스트를 렌더 가능한 폰트 하나 고르기(토푸 방지)
-        rng.shuffle(fonts)
-        fp = next((f for f in fonts if font_can_render(f, text)), None)
+        if pool:   # 배정 폰트부터 풀 안에서 순서대로
+            cand = [pool[(i_t + j) % len(pool)] for j in range(len(pool))]
+        else:
+            rng.shuffle(fonts); cand = fonts
+        fp = next((f for f in cand if font_can_render(f, text)), None)
         if fp is None:
             continue
         gt = render_in_font(fp, text)                          # 정답(깨끗 렌더)
@@ -181,8 +193,9 @@ def main():
             feats_gt.append(feat(g_gt)); feats_gen.append(feat(g_gen))
         nw = len(text.split())
         per.append((nw, mse, ss, lp)); done += 1
-        Image.fromarray(g_gen).convert("RGB").save(bdir / "fake" / "w" / f"{done}.png")
-        Image.fromarray(g_gt).convert("RGB").save(bdir / "real" / "w" / f"{done}.png")
+        for kind, a in (("fake", g_gen), ("real", g_gt)):
+            (bdir / kind / fp.stem).mkdir(parents=True, exist_ok=True)
+            Image.fromarray(a).convert("RGB").save(bdir / kind / fp.stem / f"{done}.png")
         if done % 20 == 0:
             print(f"  {done}/{args.n} ...")
 
@@ -199,6 +212,13 @@ def main():
                                           FolderDataset(str(bdir / "real"))))
     except Exception as e:
         bfid = float("nan"); print(f"  BFID 실패: {e}")
+    try:
+        from hwd.scores import HWDScore
+        hwd = float(HWDScore(height=32)(FolderDataset(str(bdir / "fake")),
+                                        FolderDataset(str(bdir / "real"))))
+    except Exception as e:
+        hwd = float("nan"); print(f"  HWD 실패: {e}")
+    n_font = len(list((bdir / "fake").iterdir()))
     shutil.rmtree(bdir, ignore_errors=True)
 
     def agg(rows):
@@ -217,6 +237,7 @@ def main():
             lines.append(f"{name:14s} {m:8.4f} {s:8.4f} {l:8.4f}  (n={len(sub)})")
     lines.append(f"\nFID(전체 {done}샘플, 생성 vs 정답): {fid:.2f}")
     lines.append(f"BFID(Otsu이진화 후 FID, 폰트충실도·배경무시): {bfid:.2f}")
+    lines.append(f"HWD(폰트별 VGG16 특징거리 평균, {n_font}폰트 × ~{args.per_font}샘플): {hwd:.4f}")
     report = "\n".join(lines)
     print("\n" + report)
     Path(args.out).parent.mkdir(parents=True, exist_ok=True)

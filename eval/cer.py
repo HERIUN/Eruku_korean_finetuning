@@ -57,7 +57,7 @@ def main():
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--english", action=argparse.BooleanOptionalAction, default=False)
     ap.add_argument("--coherent", action=argparse.BooleanOptionalAction, default=False, help="랜덤단어 대신 실제 문장 세그먼트(OCR 신뢰성↑)")
-    ap.add_argument("--no-style-text", action=argparse.BooleanOptionalAction, default=False)
+    ap.add_argument("--no-style-text", action="store_true")
     ap.add_argument("--ocr-gpu", action=argparse.BooleanOptionalAction, default=False, help="OCR 를 GPU 로(기본 CPU, 학습과 GPU 경합 회피)")
     ap.add_argument("--out", default=str(HERE / "finetune_runs" / "cer.txt"))
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")

@@ -398,7 +398,7 @@ class Emuru(torch.nn.Module):
     
     @torch.inference_mode()
     def generate_batch(self, decoder_inputs_embeds_vae, style_text, gen_text, cfg_scale=1.0,
-                       max_new_tokens=64, min_gen_tokens=0, prefix_lens=None):
+                       max_new_tokens=64, min_gen_tokens=0, prefix_lens=None, gen_only=False):
         """배치 + KV 캐시 자기회귀 생성.
 
         원본 구현은 매 토큰마다 (a) T5 encoder 를 텍스트에 다시 돌리고 (b) 디코더를
@@ -412,6 +412,14 @@ class Emuru(torch.nn.Module):
                 최대폭으로 오른쪽 패딩하므로 이걸 안 주면 패딩까지 style 로 먹는다.
                 (여기선 좌측 패딩으로 다시 정렬 — T5 는 상대위치라 안전)
             min_gen_tokens: 이 토큰 수 전까지는 EOG(종료) 예측을 억제 (조기종료 방지 테스트용)
+            gen_only: True 면 **첫 SOG 뒤의 이미지 토큰(special==2)만** VAE 디코딩해 gen 이미지만 돌려준다.
+                학습 MSE 가 `specials == 2` 위치에만 걸리므로(forward 의 mse_mask) SOG/EOG 위치의
+                t5_to_vae 출력은 한 번도 학습 안 된 값 — 섞어 디코딩하면 ')' 모양 얼룩이 된다.
+                gen 이미지도 학습 땐 style 과 따로 VAE 인코딩되므로 따로 디코딩하는 게 맞다.
+                SOG 를 안 냈으면 생성 토큰 전부(echo 포함 — 모델 실패로 그대로 센다).
+                "ctx" 면 style 토큰도 같이 디코딩(VAE 디코더 attention 이 style 맥락을 보도록)하고 **SOG 만** 뺀 뒤
+                style·echo 열을 잘라낸다. EOG 열은 남긴다 — 미학습이지만 마지막 획이 담길 때가 있어 빼면
+                words FID/BFID 가 1~2 나빠졌다(lines·한글은 동률, docs/EXPERIMENTS.md §12).
 
         Returns:
             (imgs, specials) — imgs[i]=[c,h,w] 라인이미지([-1,1]),
@@ -527,14 +535,34 @@ class Emuru(torch.nn.Module):
         for el in range(bs):
             eog = (specs[el] == 1).nonzero().flatten()
             n = int(eog[0].item()) + 1 if len(eog) else specs.size(1)   # EOG 토큰까지 포함
-            z_seq = torch.cat([z_head[el], lats[el, :n]], dim=0)[None].to(self.vae.device)
-            img = torch.clamp(self.vae.decode(self.z_rearrange(z_seq)).sample, -1, 1)
-            imgs.append(img[0])
-            specials.append(torch.cat([spec_head[el], specs[el, :n].to(spec_head[el].dtype)]))
+            z_seq = torch.cat([z_head[el], lats[el, :n]], dim=0)
+            sp = torch.cat([spec_head[el], specs[el, :n].to(spec_head[el].dtype)])
+            img, sp = self._decode_seq(z_seq, sp, len(spec_head[el]), gen_only)
+            imgs.append(img)
+            specials.append(sp)
         return imgs, specials
 
+    def _decode_seq(self, z_seq, sp, n_head, gen_only):
+        """latent 열 [t,8] + special [t] → 이미지 [c,h,w]. gen_only: False=전부, True=gen 이미지 토큰만,
+        "ctx"=style+이미지 토큰+EOG 를 같이 디코딩(SOG 만 뺌)하고 첫 SOG 앞 열까지 잘라냄."""
+        if not gen_only:
+            return torch.clamp(self.vae.decode(self.z_rearrange(z_seq[None].to(self.vae.device))).sample, -1, 1)[0], sp
+        sog = (sp == 0).nonzero().flatten()
+        start = int(sog[0]) + 1 if len(sog) else n_head
+        keep = (sp == 2) | (sp == 3)
+        if gen_only is True:
+            keep[:start] = False
+        gen = keep.clone(); gen[:start] = False
+        if gen_only == "ctx":
+            keep |= sp == 1
+        if not gen.any():                                            # 이미지 토큰 0개 = 빈 결과
+            return torch.ones(3, 64, 8, device=self.vae.device), sp[gen]
+        img = torch.clamp(self.vae.decode(self.z_rearrange(z_seq[keep][None].to(self.vae.device))).sample, -1, 1)[0]
+        return img[:, :, int(keep[:start].sum()) * 8:], sp[gen]
+
     @torch.inference_mode()
-    def generate(self, decoder_inputs_embeds_vae, style_text, gen_text, cfg_scale=1.0, max_new_tokens=64, min_gen_tokens=0):
+    def generate(self, decoder_inputs_embeds_vae, style_text, gen_text, cfg_scale=1.0, max_new_tokens=64, min_gen_tokens=0,
+                 gen_only=False):
         """단일 샘플 생성. 배치는 generate_batch() 를 쓸 것.
 
         min_gen_tokens: 이 토큰 수 전까지는 EOG(종료) 예측을 억제 (조기종료 방지 테스트용)
@@ -544,7 +572,7 @@ class Emuru(torch.nn.Module):
                              "— 배치는 generate_batch() 를 쓸 것")
         imgs, specials = self.generate_batch(decoder_inputs_embeds_vae, style_text, gen_text,
                                              cfg_scale=cfg_scale, max_new_tokens=max_new_tokens,
-                                             min_gen_tokens=min_gen_tokens)
+                                             min_gen_tokens=min_gen_tokens, gen_only=gen_only)
         return imgs[0][None], specials[0]
 
 

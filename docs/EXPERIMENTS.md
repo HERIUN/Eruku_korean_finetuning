@@ -17,7 +17,7 @@ README 에서 분리한 **측정 기록**이다. 코드에 반영된 결론만 �
 | §9 | 코퍼스 35배 (2026-09) | 자연어 음절 32%→90%. seen 평균 0.084 → **0.069**, **폭주율 1.0% → 0.3%**(VAE 상한과 동률) |
 | §10 | VAE 폰트 156배 (2026-09) | 측정 3중 오류로 결론 보류 → §11 |
 | §11 | **§4 정정** (2026-09) | **HTR loss 를 껐던 게 잘못**. MSE 는 ㅇ↔ㅁ 혼동을 못 본다. HTR 0.3 이 CER 절반·자모교체 −52% |
-| §12 | InkSpire 한글 재현 (2026-09) | FLUX-Fill LoRA + 레이아웃 CFM. Eruku 와 같은 프로토콜로 직접 비교 — **TBD** |
+| §12 | 생성 디코딩 방식 (2026-10) | SOG/EOG latent 는 학습 안 된 값 — 섞어 디코딩하면 얼룩·w/o T_s 붕괴(FID 64→31). **style+이미지 토큰만 같이 디코딩(ctx)** 채택 |
 
 ---
 
@@ -614,14 +614,152 @@ MSE 로는 안 잡히고 글자는 바뀐다. HTR 은 프로토타입 편향 때
 - **VAE 판정 지표에서 roundtrip MSE 를 단독으로 쓰지 말 것.** MSE 는 자모 혼동에 눈이 멀다.
   CER·음절정확도·자모교체를 같이 볼 것.
 
----
+## 12. 생성 디코딩 방식 — special 토큰 latent 를 이미지로 디코딩하면 안 된다 (2026-10-21~)
 
-## 12. InkSpire 한글 재현 → **별도 repo 로 이관** (2026-09-15)
+### 요약 — 디코딩 방식 전체 비교 (모두 같은 latent, 디코딩만 다름)
 
-논문 *Learning to Generate Stylized Handwritten Text via a Unified Representation of Style,
-Content, and Noise* (Wang et al., ICLR 2026) 재현은 `/data/work/dgkang/inkspire_korean` 로
-분리했다. 코드·체크포인트·평가 결과·실험 로그 전부 그쪽에 있다.
+생성 후 latent 열 = `[style …][echo …][SOG][생성 …][EOG]` (echo = SOG 전에 모델이 style 을 이어 그린 열).
+T5 생성은 네 방식이 완전히 같고, **VAE 에 어떤 열을 넣느냐**만 다르다. 결과는 항상 첫 SOG 뒤만 남긴다.
 
-결론만 남긴다: **Eruku 우세.** held-out v2/test style-ref 중앙값 기준 Eruku corpusmax s45000 이
-0.000 / 폭주 0.0%, InkSpire 최고 체크포인트가 0.190 / 1.7% 였다. 세 세트·두 프로토콜 전부
-같은 방향이다. 논문에 Eruku(Emuru) 와의 직접 비교 수치는 없다.
+| 방식 | VAE 에 넣는 열 | 결과에서 자르는 법 | 비고 |
+|---|---|---|---|
+| all (이전 로컬) | 전부 (style·echo·SOG·생성·EOG) | 디코딩 후 첫 SOG 다음 px 부터 | 미학습 SOG latent 가 attention 으로 줄 전체 오염 |
+| gen / imgtok | 생성만 | 없음 | 디코더가 style 맥락을 못 봄 |
+| ctx (구) | style·echo·생성 (SOG·EOG 뺌) | 디코딩 후 (style+echo 열) × 8px | 2026-10-22 채택 → 10-23 대체 |
+| **ctx+EOG** ⭐ | style·echo·생성·EOG (**SOG 만** 뺌) | 동일 | **최종 채택** — 현재 `gen_only="ctx"` 의 정의. EOG 칸에 담긴 마지막 획 보존 |
+| (참고) HF 릴리즈 발행본 | 생성·EOG | 디코딩 **전** latent 에서 첫 SOG 뒤만 | ≈ gen+EOG. style 은 T5 생성엔 쓰이고 디코딩엔 안 들어감 |
+
+셀 = HWD / ΔCER / FID / BFID (IAM, γ1.25), 한글은 PP-OCR CER(corpus). **굵게** = 행 최선(동률 포함).
+
+| 세트 | all | gen | ctx | ctx+EOG |
+|---|---|---|---|---|
+| IAM lines 공개 가중치 w/ T_s (500) | **2.04 / 0.01** / 23.18 / **9.51** | 2.08 / 0.02 / **23.01** / 10.12 | **2.04** / 0.02 / 23.30 / 9.63 | **2.04** / 0.02 / 23.21 / 9.53 |
+| IAM lines 공개 가중치 w/o T_s (500) | 3.65 / 0.14 / 64.36 / 43.94 | 2.72 / **0.02 / 29.65** / 18.37 | **2.67 / 0.02** / 30.68 / 18.21 | 2.68 / **0.02** / 30.51 / **18.05** |
+| IAM lines corpusmax w/ T_s (500) | **1.89 / −0.04 / 22.46 / 6.32** | 1.95 / **−0.04** / 23.16 / 6.78 | **1.89 / −0.04** / 22.49 / 6.36 | **1.89 / −0.04** / 22.49 / 6.35 |
+| IAM lines corpusmax w/o T_s (500) | 3.14 / 0.01 / 49.68 / 23.93 | 2.37 / **−0.04 / 23.73** / 9.25 | **2.32 / −0.04 / 23.73** / 9.04 | 2.33 / **−0.04** / 23.75 / **9.02** |
+| IAM words 공개 가중치 w/ T_s (2000) | **2.92** / 0.98 / 194.27 / **166.99** | 2.95 / 1.04 / 196.01 / 170.37 | **2.92** / 0.99 / 196.06 / 168.73 | **2.92 / 0.95 / 194.23 / 167.04** |
+| IAM words corpusmax w/ T_s (2000) | 2.65 / **0.03 / 62.73** / 37.96 | **2.63** / 0.04 / 63.81 / 40.78 | **2.63** / 0.05 / 64.02 / 39.08 | 2.65 / **0.03** / 62.86 / **37.69** |
+| 한글 corpusmax w/ T_s (300) | 0.0282 | **0.0277** | **0.0277** | 0.0282 |
+| 한글 corpusmax w/o T_s (300) | 0.1070 | 0.0174 | 0.0178 | **0.0171** |
+
+결과 폴더: lines `finetune_runs/_iam/decode_ab_lines4/`, words `finetune_runs/_iam/decode_ab_words/`, 한글 `finetune_runs/_ppocr_ko/decode_ab/`.
+(lines 4-way 는 아래 3-way 와 별도 재생성인데 all 이 23.18 vs 23.17 로 재현됐다.)
+
+**결론 — ctx+EOG(SOG 만 빼기)를 최종 채택 (2026-10-23)**
+- **SOG 는 반드시 빼야 한다**: w/o T_s 에서 all 대비 FID −52%, BFID −58~62%, 한글 CER −84%.
+- **style 은 같이 디코딩한다**: gen 은 lines w/ T_s 에서 HWD +0.04~0.06, BFID +0.5~0.6 손해.
+- **EOG 는 남긴다**: lines 는 ctx 와 동률(±0.2), words 는 ctx 대비 FID −1.2~1.8, BFID −1.4~1.7, ΔCER −0.02~0.04.
+  학습은 안 됐지만 EOG 칸에 마지막 획(쉼표·마침표·끝 글자 꼬리)이 담기는 경우가 있다(아래 '샘플' 몽타주의 'into it,').
+  단어처럼 짧은 출력일수록 그 8px 비중이 커서 words 에서만 차이가 드러난다.
+- 구현: `models/eruku.py` `_decode_seq(gen_only="ctx")` 가 이제 SOG 만 뺀다. HF 릴리즈도 같은 규약(`tools/hf_upload.py` 패치 ③).
+- 아래 소절들의 'ctx' 는 **구 ctx(SOG·EOG 뺌)** 를 가리킨다.
+
+### 발견 경위
+IAM w/o T_s 평가(README 'IAM 공식 벤치마크')에서 공개 가중치가 FID 61 / BFID 44 로 논문 w/o 행(20.44 / 9.63)과 크게 달랐다.
+샘플을 보면 줄 맨 앞에 ')' 모양 얼룩이 있고 획이 전체적으로 굵고 번졌다.
+
+### 원인 — 학습에서 SOG/EOG 위치의 latent 는 한 번도 학습되지 않는다
+`models/eruku.py` `forward`:
+```python
+mse_mask = (specials == 2).unsqueeze(2)      # 이미지 토큰 위치만
+mse_loss = self.mse_criterion(vae_latent * mse_mask, decoder_inputs_embeds_vae * mse_mask)
+```
+SOG(0)/EOG(1) 위치는 special 분류(CE)만 배우고, 그 위치의 `t5_to_vae` 출력은 마스크로 0 이 되어 학습되지 않는다.
+그런데 추론(`generate_batch`)은 style + 생성 토큰 + **SOG/EOG latent 까지** 한 줄로 이어 VAE 디코딩한 뒤 픽셀에서 잘랐다.
+w/o T_s 는 코드가 style 뒤에 SOG 를 미리 넣고 `t5_to_vae(sog)` 를 줄에 끼우므로 100% 발생한다.
+VAE 디코더 mid-block attention 이 줄 전체를 보므로, 이 쓰레기 latent 하나가 경계 얼룩에 그치지 않고 **줄 전체 화질**을 망쳤다.
+원본 repo `trim_white` 의 '맨 앞 잉크 덩어리 제거'는 사실상 이 얼룩 청소이고, 우리 HF 릴리즈는 첫 SOG 는 빼지만 EOG 는 여전히 디코딩한다.
+
+### 중간에 버린 안: 픽셀 휴리스틱 `trim_edges`
+SOG 크롭 뒤 '왼쪽 16px 이하 잉크 덩어리 + 앞뒤 흰 여백(threshold 0.9)' 제거. FID 는 줄었지만 16px·0.9 가 데이터 보고 정한
+숫자라 공식 프로토콜로 쓰기엔 근거가 약해 폐기. 원인(디코딩)을 고치는 쪽으로 감.
+
+### A/B — 같은 latent, 디코딩만 다르게 (IAM lines 전체 2,925, γ1.25)
+생성은 argmax 결정적이라 두 실행의 latent 가 같다. all = 전부 디코딩 후 첫 SOG 다음 px 크롭(이전), gen = 첫 SOG 뒤 이미지 토큰만 디코딩.
+
+| 세트 | all (이전) HWD / ΔCER / FID / BFID | gen |
+|---|---|---|
+| 공개 가중치 w/o T_s | 3.38 / 0.16 / 61.08 / 43.95 | **2.42 / 0.03 / 28.02 / 18.38** |
+| 공개 가중치 w/ T_s | 1.79 / 0.00 / 19.65 / **7.83** | 1.81 / 0.01 / **19.35** / 8.37 |
+| corpusmax w/ T_s | **1.64 / −0.03 / 20.16 / 4.78** | 1.67 / −0.03 / 20.68 / 5.28 |
+| corpusmax words w/ T_s | 2.34 / 0.04 / **57.86 / 36.35** | 2.28 / 0.06 / 62.18 / 42.71 |
+
+- w/o T_s 는 gen 이 압도적으로 낫다.
+- **w/ T_s 는 gen 이 소폭 손해**(BFID +0.5~6, HWD +0.02~0.03). 가설: gen 만 따로 디코딩하면 VAE 디코더 attention 이
+  style 맥락을 못 봐서 잉크 톤·굵기를 style 에 덜 맞춘다.
+
+### 3-way 비교 — ctx = style + 이미지 토큰을 같이 디코딩, SOG/EOG 만 뺌 → **채택**
+style 맥락은 유지하고 학습 안 된 값만 제거. 첫 SOG 앞의 (style+echo) 열 수 × 8px 를 잘라내므로 픽셀 휴리스틱 없음.
+`models/eruku.py` `_decode_seq(gen_only="ctx")`. IAM lines 500샘플(`--n 500` 부분집합), **같은 latent** 를 all/gen/ctx 로 디코딩.
+결과 `finetune_runs/_iam/decode_ab/<모델>_<Ts|noTs>/<all|gen|ctx>/report.txt`. 셀 = HWD / ΔCER / FID / BFID.
+
+| 세트 | all (이전) | gen (이미지 토큰만) | **ctx** |
+|---|---|---|---|
+| 공개 가중치 w/ T_s | **2.04 / 0.01** / 23.17 / **9.51** | 2.08 / 0.02 / **23.00** / 10.12 | **2.04** / 0.02 / 23.29 / 9.63 |
+| 공개 가중치 w/o T_s | 3.65 / 0.14 / 64.34 / 43.78 | 2.72 / **0.02 / 29.65** / 18.37 | **2.67 / 0.02** / 30.68 / **18.21** |
+| corpusmax w/ T_s | **1.89 / −0.04 / 22.46 / 6.32** | 1.95 / −0.04 / 23.16 / 6.79 | **1.89 / −0.04** / 22.49 / 6.36 |
+| corpusmax w/o T_s | 3.14 / 0.01 / 49.68 / 23.93 | 2.36 / **−0.04** / 23.73 / 9.27 | **2.32 / −0.04 / 23.71 / 9.06** |
+
+- **ctx 는 w/ T_s 에서 all 과 같고(차이 ≤0.12), w/o T_s 에서 gen 과 같다** — 두 방식의 장점을 다 가진다.
+- gen 의 w/ T_s 손해는 가설대로 **style 맥락 상실**이었다(ctx 로 style 을 같이 디코딩하면 사라짐).
+- all 의 w/o T_s 붕괴는 SOG latent 탓이 확정(ctx 는 SOG/EOG 만 뺐는데 FID 64→31, 50→24).
+- **결정: 로컬 추론 기본을 ctx 로** (`infer/show.py` 의 `gen_arr`·`gen_from_style_batch` → `gen_only="ctx"`). 한글 평가도 같은 경로.
+  이전 측정(한글 htr_cer·echo 등)은 all 방식 — w/ T_s 라 영향 없음을 아래 '한글 4-way' 에서 확인.
+- 남은 일: HF 릴리즈 `modeling_eruku.py` 는 첫 SOG 는 빼지만 EOG latent 는 여전히 디코딩한다.
+
+### 샘플 — 같은 latent 의 all / gen / ctx
+행 = real, w/ T_s all·gen·ctx, w/o T_s all·gen·ctx. 샘플 6개 = all↔ctx(w/o T_s) 잉크량 차이 상위 3 + 등간격 3.
+생성: `.venv/bin/python docs/_decode_montage.py` (decode_ab 결과를 읽음).
+
+| 공개 가중치 | corpusmax |
+|---|---|
+| ![](img_decode/decode_pretrained.png) | ![](img_decode/decode_corpusmax.png) |
+
+- w/o T_s all 은 두 모델 모두 왼쪽 ')' 얼룩 + 줄 전체가 굵고 번짐. gen·ctx 는 깨끗하고 서로 구분 안 됨.
+- w/ T_s 는 세 방식이 거의 같다.
+- **gen·ctx 가 줄 끝 획을 잃는 경우가 있다** (공개 가중치: "into it," → 쉼표 사라짐, "advice and" → "ano").
+  EOG 위치 latent 가 학습 안 됐는데도 마지막 획을 담고 있을 때가 있다는 뜻. 500줄 ΔCER 에선 차이가 안 났지만
+  ctx+EOG(SOG 만 빼기) 변형을 따로 재볼 가치가 있다.
+
+### 한글 — 같은 latent 4-way (2026-10-23)
+corpusmax s45000, `htr_cer --coherent --n 300 --cfg 1.0`(고정 평가셋, echo), 리더 = **PP-OCRv6 ko**(`eval/ppocr_rec.py`).
+생성 1회의 latent 를 all / imgtok(= 위 gen) / ctx / ctxeog(ctx + EOG latent, SOG 만 뺌) 로 디코딩.
+결과 `finetune_runs/_ppocr_ko/decode_ab/<Ts|noTs>/<방식>/`, `*.ppocr.txt`. 셀 = CER(corpus) / 샘플 평균 / 중앙값 / 폭주율.
+
+| 방식 | w/ T_s | w/o T_s |
+|---|---|---|
+| 정답 렌더 (리더 바닥) | 0.0168 / 0.0167 / 0 / 0% | 0.0168 / 0.0167 / 0 / 0% |
+| all (이전) | 0.0282 / 0.0264 / 0 / 0% | **0.1070 / 0.1141 / 0.071** / 0% |
+| imgtok | 0.0277 / 0.0257 / 0 / 0% | 0.0174 / 0.0161 / 0 / 0% |
+| **ctx** | 0.0277 / 0.0246 / 0 / 0% | 0.0178 / 0.0180 / 0 / 0% |
+| ctxeog | 0.0282 / 0.0267 / 0 / 0% | 0.0171 / 0.0171 / 0 / 0% |
+
+- **w/ T_s 는 네 방식이 같다** → 이전(all) 방식으로 잰 한글 w/ T_s 수치(§2~§11)는 그대로 유효.
+- **w/o T_s 는 all 만 무너진다**(CER 0.107, 중앙값 0.071 — 나머지는 리더 바닥 수준). IAM 과 같은 SOG latent 문제.
+- ctxeog 는 ctx 와 차이 없음(±0.001) — IAM 몽타주에서 보인 '줄 끝 획 손실'은 한글 CER 에는 안 잡힌다. ctx 유지.
+- 한글 HTR 리더(ctx): w/ T_s 평균 0.075 / 중앙값 0 / 폭주 0.0%, w/o T_s 0.080 / 0 / 0.7%.
+
+### ⚠️ 부수 발견: `--no-style-text` 가 한글 평가 스크립트에서 한 번도 안 켜졌다
+`argparse.BooleanOptionalAction` 은 이름이 `--no-` 로 시작하면 그 옵션을 **부정형**으로 취급해 `--no-style-text` → False.
+`eval/htr_cer.py`·`eval/cer.py`·`eval/echo_metrics.py`·`infer/show.py`·`infer/matrix.py` 다섯 곳이 이랬다 → `store_true` 로 수정.
+**이 스크립트들로 낸 과거 'no-stext' 결과는 실제로는 w/ T_s 였다.** (`eval/iam_shtg.py`·`infer/echo_compare.py` 는 원래 `store_true` 라 무관.)
+위 w/o T_s 행은 수정 후 재측정한 값.
+
+### 한글 — 생성에서만 틀리는 글자 (정답 렌더는 PP-OCR 정독)
+편집거리 정렬로 '정답 렌더는 맞게 읽고 생성은 틀린' 목표 글자 위치만 셈 (정독 5,566자 기준).
+
+| | 생성 오류 | 그중 받침 글자 (전체 비중 45%) |
+|---|---|---|
+| w/ T_s all / ctx | 119 / 118자 (2.1%) | 66% / 65% |
+| w/o T_s all / ctx / imgtok | **659** / 81 / 82자 | 64% / 73% / 77% |
+
+- 디코딩 무관하게 남는 오류(ctx·imgtok 공통) = 모델이 실제로 획을 틀리게 그림: 원→윈(ㅝ 의 ㅓ 획, 7/73),
+  를→틀(ㄹ 위에 획이 붙어 ㅌ 꼴, 4/67), 높→놀(받침 ㅍ→ㄹ), 축→출·춫(받침), 청→정(거센소리 획 손실), 은·온→문(ㅇ→ㅁ).
+  받침·복모음·거센소리처럼 획이 촘촘한 자리 → VAE 한글 재구성 한계(§3)·받침 획 손실(§7)과 같은 계열.
+- w/o T_s all 만의 오류 = 번짐으로 얇은 가로획 소실: 한→인, 사→시, 가→기, 학→익, 쉼표→마침표(15회). ctx 에선 사라짐.
+- 글자당 2~7건이라 순위보단 유형으로 읽을 것. 리더 자체 혼동이 일부 섞였을 수 있다.
+
+![](img_decode/ko_char_errors.png)
+
+생성: `.venv-paddle/bin/python eval/ppocr_rec.py --save-preds <dirs>` 후 `.venv/bin/python docs/_ko_char_err_montage.py`.
+행 = 정답 렌더(빨간 박스 = 틀린 글자 근사 위치) / all / ctx, 각 줄 아래 파란 글씨 = PP-OCR 읽기.

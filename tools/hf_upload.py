@@ -147,6 +147,62 @@ PATCH_CROP_NEW = """        # Crop the style prefix off at the *actual* SOG colu
         z_sequence = z_sequence[:, :, :, min(cut * q, max(0, z_sequence.size(-1) - q)):]"""
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# modeling_eruku.py 패치 ③: ctx 디코딩 — SOG latent 는 VAE 에 넣지 않는다
+# ─────────────────────────────────────────────────────────────────────────────
+# 학습 MSE 는 IMG 위치(special==2)에만 걸려 SOG/EOG 위치의 t5_to_vae 출력은 한 번도 학습되지 않는다.
+# 그걸 같이 디코딩하면 ')' 얼룩이 생기고 VAE mid-block attention 을 타고 줄 전체가 번진다
+# (style_text="" 에서 특히: 한글 PP-OCR CER 0.107 → 0.018, IAM FID 64 → 31; docs/EXPERIMENTS.md §12).
+# style 열은 같이 디코딩해야 잉크 톤이 style 에 맞으므로 남기고, 디코딩 뒤 첫 SOG 앞 열만큼 픽셀로 자른다.
+# EOG 열은 남긴다 — 미학습이지만 마지막 획이 담길 때가 있어 빼면 IAM words FID/BFID 가 1~2 나빠졌다.
+# get_model_inputs 가 style 끝에 붙이는 ones 열(SOG placeholder)도 이미지 latent 가 아니라 뺀다.
+# 로컬 models/eruku.py _decode_seq(gen_only="ctx") 와 같은 규약.
+PATCH_CTX_OLD = """        z_sequence = self.z_rearrange(z_sequence)
+
+""" + PATCH_CROP_NEW + """
+
+        img = torch.clamp(self.vae.decode(z_sequence).sample, -1, 1)"""
+PATCH_CTX_NEW = """
+        # ctx decoding: decode the style + IMG + EOG latents together and leave
+        # out the SOG latents. Training puts the MSE loss only on IMG positions
+        # (special == 2), so the latent at an SOG position is never trained;
+        # decoding it adds a blob and, through the VAE mid-block attention,
+        # smears the whole line. The EOG column often still carries the last
+        # stroke, so it stays. The style columns stay in so the decoder keeps
+        # the style's ink tone, and are cropped off in pixels afterwards.
+        # special_sequence is 1:1 with the latent columns (3=style, 2=IMG,
+        # 0=SOG, 1=EOG); the last style column is the ones SOG placeholder from
+        # get_model_inputs, not an image latent.
+        sp = special_sequence
+        n_style = decoder_inputs_embeds_vae.size(1)
+        sog_at = (sp == 0).nonzero().flatten()
+        start = (int(sog_at[0].item()) + 1) if len(sog_at) else n_style
+        keep = (sp == 2) | (sp == 3)
+        keep[n_style - 1] = False
+        gen = keep.clone()
+        gen[:start] = False
+        keep |= sp == 1
+        if not gen.any():  # no IMG token after SOG -> blank result
+            return torch.ones(1, self.vae.config.out_channels, 64, 8, device=self.vae.device), sp.to(self.T5.device)
+        z_sequence = self.z_rearrange(z_sequence[:, keep.to(z_sequence.device)])
+        img = torch.clamp(self.vae.decode(z_sequence).sample, -1, 1)
+        q = self.config.slices_per_query
+        img = img[..., int(keep[:start].sum()) * q * 8:]"""
+
+# ④ _trim_white 는 원본 IAM 스크립트에서 온 것이라 '맨 앞 잉크 덩어리'를 style 잔여물로 보고 버린다.
+# 크롭이 SOG 기준으로 정확해진 지금은 그게 생성의 첫 글자(획)를 지운다 → 흰 여백만 다듬는다.
+PATCH_TRIM_OLD = """        # Skip initial non-white columns
+        for v in vertical_min:
+            if v >= threshold:
+                break
+            start_idx += 1
+        
+"""
+PATCH_TRIM_NEW = """        # (No longer skips a leading ink run: the style prefix is cut at the SOG
+        # column, so leading ink belongs to the generated text.)
+"""
+
+
 def _apply_patch(src: str, name: str, marker: str, steps) -> str:
     """치환 목록 steps=[(old, new)…] 를 원자적으로 적용.
 
@@ -176,6 +232,12 @@ def patch_modeling(src: str) -> str:
     ])
     src = _apply_patch(src, "SOG 기준 style 크롭", "sog_at", [
         (PATCH_CROP_OLD, PATCH_CROP_NEW),
+    ])
+    src = _apply_patch(src, "ctx 디코딩", "ctx decoding", [
+        (PATCH_CTX_OLD, PATCH_CTX_NEW),
+    ])
+    src = _apply_patch(src, "trim_white 앞 잉크 보존", "No longer skips a leading ink run", [
+        (PATCH_TRIM_OLD, PATCH_TRIM_NEW),
     ])
     return src
 
@@ -580,6 +642,11 @@ img.save("out.png")
 - Preprocessing is handled for you and matches training: the style image is converted to RGB,
   resized to height 64, and normalised to [-1, 1] before it reaches the VAE. Width is *not*
   padded to a multiple of 8 — training never padded either, so do not add it.
+- Decoding: the style, image and EOG latents are decoded by the VAE together and the style
+  columns are cropped off afterwards; the SOG latent is left out. Training only puts the
+  latent loss on image positions, so the SOG latent is never trained and decoding it smears
+  the whole line (worst with an empty `style_text`). The EOG column often still carries the
+  last stroke, so it is kept.
 
 ## Results
 

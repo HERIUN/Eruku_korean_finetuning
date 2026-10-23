@@ -303,6 +303,11 @@ style 참조 이미지의 전사 텍스트. `f"{style_text}<sog>{gen_text}"` 로
 ./eval.sh all  --models a=<ckptA> b=<ckptB> --coherent     # 여러 모델 × ko/en 배터리
 ./eval.sh fonts                       # 폰트 품질 감사 (두부·malformed 글리프)
 
+# IAM 공식 벤치마크 (Eruku 논문 Table 3, 영어 실제 손글씨) — 아래 'IAM 공식 벤치마크'
+CUDA_VISIBLE_DEVICES=2 .venv/bin/python eval/iam_shtg.py --ckpt <ckpt> --split lines|words --cfg 1.25 --out finetune_runs/_iam/<label>
+# 한글 독립 리더 PP-OCRv6 ko (별도 env .venv-paddle, paddle 3.3.1 — 설치법은 파일 docstring)
+.venv/bin/python eval/htr_cer.py --ckpt <ckpt> --coherent --dump-dir <dir> && .venv-paddle/bin/python eval/ppocr_rec.py <dir>/gt <dir>/gen
+
 ./eval.sh exp                         # 일회성 실험 스크립트 목록
 ./eval.sh exp jong_stroke_loss --n-lines 120   # experiments/jong_stroke_loss.py 실행
 ```
@@ -412,6 +417,7 @@ writer 다양성이 최대 한계라([결과 요약](#결과-요약)) 폰트 확
 | VAE 강건성 | 실제 스캔 손글씨는 **여백이 latent std 를 6~29배**로 튀겨 runaway → ink bbox 크롭 필요(재학습 불필요) | [VAE_ROBUSTNESS.md](docs/VAE_ROBUSTNESS.md) |
 | 종성 획 손실 | 겹받침 음절정확도가 홑받침보다 **22%p** 낮다. 원인은 받침 개수가 아니라 **글리프 밀도**(조사 진행 중) | [JONGSEONG_STROKE_LOSS.md](docs/JONGSEONG_STROKE_LOSS.md) |
 | 지표 선택 | 픽셀 지표(MSE/SSIM)는 글자 정렬오차에 민감·언어간 비교 부적절. **한글 주 지표는 HTR CER**(`eval/htr_cer.py`) | [§2](docs/EXPERIMENTS.md) |
+| IAM 공식 벤치 | upstream 프로토콜로 논문 수치 재현(words 81.0/62.7 vs 논문 79.7/63.3). 한글 파인튜닝이 영어 실제 손글씨를 **안 깎는다** — corpusmax 가 두 프로토콜 모두 HWD·ΔCER 에서 공개 가중치 이상, words 는 크게 앞섬 | [아래](#iam-공식-벤치마크-shtg-iam) |
 
 **현재 best 체크포인트**: `finetune_runs/eruku_short_fullmse/checkpoint_step_030000.pth`
 (한글 전체 CER 0.127 / 단문 0.286 / 장문 0.059, 영어 0.045 — n=100, cfg=1.0, coherent).
@@ -419,6 +425,62 @@ val_mse 는 s20000 이 더 낮지만 생성 CER 은 s30000 이 낫다 — **ckpt
 
 > 실행 환경 주의: 이 repo 는 **`.venv/bin/python`** 으로 실행한다(torch 2.9+cu128,
 > diffusers/skimage/transformers 포함). 시스템 `python`(miniconda base)에는 numpy 조차 없다.
+
+## IAM 공식 벤치마크 (SHTG-IAM)
+
+우리 평가셋은 style 이 폰트 렌더라 실제 필기 일반화를 못 잰다. 그래서 Eruku 논문 Table 3 와 같은
+SHTG-IAM(hwd 패키지, IAM test 필기자 161명)으로 영어 실제 손글씨를 잰다. `eval/iam_shtg.py`, 결과 `finetune_runs/_iam/`.
+FID/BFID 는 `unfold()` 후 height 32 로 재야 논문과 맞는다(공식 Emuru 생성물로 채점기 검증, 4지표 모두 논문과 일치).
+ΔCER = TrOCR CER(생성) − CER(실제).
+T_s = style 이미지의 전사(style text). w/ = 전사를 줌, w/o = style 이미지만 줌(`--no-style-text`).
+
+전부 γ=1.25. 셀 = HWD↓ / ΔCER↓ / FID↓ / BFID↓. 프로토콜 차이는 아래 '평가 프로토콜' 절.
+
+| 모델 | 프로토콜 | T_s | IAM Lines | IAM Words |
+|---|---|---|---|---|
+| 논문 Eruku (Table 3 = Table 6) | 논문 | w/ | 1.70 / 0.06 / 16.40 / 4.88 | 3.23 / 0.77 / 79.66 / 63.31 |
+| 논문 Eruku (Table 6) | 논문 | w/o | 2.51 / 0.04 / 20.44 / 9.63 | – |
+| 논문 공개 가중치 (재측정) | upstream | w/ | 1.79 / 0.03 / 20.43 / 5.68 | 3.12 / 0.51 / 81.02 / 62.73 |
+| corpusmax s45000 (우리 학습) | upstream | w/ | 1.73 / −0.01 / 35.29 / 7.09 | **2.16** / 0.11 / **46.95** / **9.83** |
+| 논문 공개 가중치 (재측정) | ours | w/ | 1.77 / 0.01 / 19.75 / 8.11 | 2.71 / 1.31 / 203.20 / 170.72 |
+| corpusmax s45000 (우리 학습) | ours | w/ | **1.62** / **−0.03** / 20.00 / **4.75** | 2.29 / 0.09 / 62.00 / 41.60 |
+| 논문 공개 가중치 (재측정) | ours | w/o | 2.37 / 0.03 / 28.67 / 18.12 | 2.96 / 1.30 / 219.75 / 183.48 |
+| corpusmax s45000 (우리 학습) | ours | w/o | 2.02 / −0.03 / 21.22 / 7.16 | 2.53 / −0.07 / 54.11 / 32.81 |
+
+(ours 행은 구 ctx 디코딩(SOG·EOG 제외) 전체 세트 측정값. 최종 규약(SOG 만 제외)과는 같은 latent 비교에서 lines ±0.2, words FID/BFID 1~2 차이 — 전체 재측정 중. 디코딩 방식 비교는 [EXPERIMENTS §12](docs/EXPERIMENTS.md))
+
+- **논문 재현: upstream 프로토콜로 words 는 거의 그대로 나온다**(81.02 / 62.73 vs 논문 79.66 / 63.31). ours 에서 words FID 200 이 나오는 건
+  모델이 아니라 프로토콜 차이(정답 길이 상한 없음 → 공개 가중치 단어 생성 ~22% 폭주, 단어 style). lines 는 FID 가 약 4 높게 남는다
+  — 공개 스크립트(`emuru_pp` 모듈 누락)와 논문 실행 설정의 차이로 본다.
+- **한글 파인튜닝이 영어 실제 손글씨를 깎지 않는다.** 두 프로토콜 모두 corpusmax 가 HWD·ΔCER 에서 공개 가중치 이상이고,
+  words 는 폭주가 1% 로 줄어 크게 앞선다. upstream lines FID 35.29 만 예외 — 원본 저장이 회색을 검정으로 누르는데 corpusmax 출력이
+  회색 톤이 많아 손해를 더 보는 것으로 추정.
+- **w/o T_s**(style 전사 없이): corpusmax 가 공개 가중치보다 확실히 강하다(lines FID 21.22 vs 28.67). 논문 w/o 행보다도 BFID 가 낫다.
+- IAM 에서는 TrOCR 만 쓴다. 한글 독립 리더 PP-OCRv6 ko(`eval/ppocr_rec.py`)는 영어 손글씨를 못 읽는다(실제 라인 CER 0.356).
+
+### 평가 프로토콜: 우리 vs 원본(upstream)
+
+원본 = 저자 repo [Blowing-Up-Groundhogs/Eruku](https://github.com/Blowing-Up-Groundhogs/Eruku) 의 `generate_iam_eruku.py`
+(논문 IAM 생성 스크립트). `eval/iam_shtg.py --protocol upstream` 이 이것을 그대로 따른다.
+(HF 릴리즈 클래스 `modeling_eruku.py` 는 또 다르다 — `drop_text=False` 기본이라 CFG 가 꺼져 있어 같은 500샘플에서
+FID 35.6 / ΔCER 0.22 로 가장 나빴다. 논문 재현용으로 쓰지 말 것.)
+
+| 항목 | 원본 (upstream) | 우리 (ours) | 왜 바꿨나 |
+|---|---|---|---|
+| 생성 길이 상한 | **정답 이미지 폭 ×1.5** (높이 64 환산 `/8×1.5` 토큰) | 고정 480 토큰(3,840px) | 원본은 **정답 길이를 미리 안다**(oracle). 실제 사용에선 정답 이미지가 없으므로, 모델이 스스로 멈추는지(폭주)까지 재야 한다. words 에서 공개 가중치의 21.6% 폭주는 이 상한이 없어서 드러난 것 |
+| gen 영역 추출 | style 까지 전부(SOG/EOG latent 포함) 디코딩 → style 폭(px) 뒤를 자르고 `trim_white`: 맨 앞 잉크 덩어리를 style 잔여물로 보고 무조건 버림 + 앞뒤 흰 여백 제거(8px 패딩). special 토큰은 안 본다 | **style + 이미지 토큰 + EOG 를 같이 VAE 디코딩, SOG latent 만 뺌** → 첫 SOG 앞(style+echo) 열 수 × 8px 를 잘라냄 (`generate_batch(gen_only="ctx")`). 픽셀 휴리스틱 없음, 여백도 모델이 그린 그대로 | 학습 MSE 는 `specials == 2` 위치에만 걸린다(`forward` 의 `mse_mask`) → SOG 위치의 latent 는 **한 번도 학습 안 된 값**이고, 섞어 디코딩하면 ')' 얼룩이 생기고 VAE attention 을 타고 줄 전체가 번진다(w/o T_s FID 64→31). EOG 도 미학습이지만 마지막 획이 담길 때가 있어 남긴다(빼면 words FID/BFID 1~2 손해, lines·한글 동률). 원본 `trim_white` 의 '맨 앞 덩어리 제거'는 사실상 이 얼룩 청소다. style 은 같이 디코딩해야 잉크 톤·굵기가 style 에 맞는다(gen 만 따로 디코딩하면 HWD·BFID 소폭 손해). SOG 를 늦게/안 내는 실패(echo)는 잘라낸 열 수가 모델 SOG 위치로 정해지므로 그대로 성능으로 센다. 비교 실험: [EXPERIMENTS §12](docs/EXPERIMENTS.md) |
+| 저장 | `[-1,1]` 출력을 그대로 `save_image` → `[0,1]` clamp: **중간 회색이 전부 검정** | `[-1,1]→[0,255]` 정상 변환 | 원본은 사실상 대비를 깨는 버그. 공식 Emuru 생성물(hwd 배포)도 순흑 픽셀이 7.8%(실제 손글씨는 0%)로, 저자 파이프라인이 실제로 이렇게 저장했음을 확인 |
+| style 리사이즈 | LANCZOS | BILINEAR | 우리 학습·추론 파이프라인(`infer/show.py`)과 맞춤. 영향 미미 |
+| words 데이터셋 | `IAMWordsFromLines` (style = 같은 필기자의 **라인**) | `IAMWords` (style = **단어** 이미지) | 의도한 선택이 아니라 hwd 의 `IAMWords` 를 먼저 집었다. 단어 style 은 훨씬 짧아 더 어려운 조건 — 그래서 두 프로토콜을 따로 남긴다 |
+| cfg | 인자를 안 넘김 → 1.0 (`drop_text` 기본 False 라 어차피 무효) | γ=1.25, `drop_text=True` 로 CFG 실제 적용 | 논문 본문·Table 2 의 기본값이 γ=1.25. upstream 프로토콜 재측정에서도 γ=1.25 로 둔다 |
+
+**요약 — 무엇을 재느냐가 다르다**
+- **원본 = 논문 벤치마크용.** 비교 대상(GAN·diffusion)은 SOG·종료 개념이 없다. 그래서 경계 예측과 종료를 평가에서 빼고
+  (정답 길이 ×1.5 상한, SOG 대신 픽셀 휴리스틱) 이미지 품질만 같은 조건에서 비교한다. 대가로 자기회귀 특유의 실패
+  — style echo, SOG 지연·누락, 폭주 — 가 수치에 안 드러난다.
+- **우리 = 실사용 성능.** 정답 정보 없이 모델 자체의 SOG·EOG 로 자르고 멈춘다. 경계·종료 실패도 모델 성능으로 센다.
+  학습에서 이미지로 다뤄지지 않는 토큰(SOG/EOG)을 디코딩하지 않을 뿐, 픽셀 후처리는 없다.
+- 논문 수치와 비교할 땐 `--protocol upstream`, 우리 모델 선택·판정은 `--protocol ours`. 모델 간 비교는 같은 프로토콜 안에서만.
 
 ## HuggingFace 릴리즈
 

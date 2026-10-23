@@ -52,7 +52,7 @@ def main():
     ap.add_argument("--cell-w", type=int, default=340)
     ap.add_argument("--cell-h", type=int, default=72)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
-    ap.add_argument("--no-style-text", action=argparse.BooleanOptionalAction, default=False,
+    ap.add_argument("--no-style-text", action="store_true",
                     help="style_text 를 빈 문자열로 (style 이미지만으로 생성). echo 열도 gen 만 style 텍스트")
     ap.add_argument("--max-img-len", type=int, default=8192,
                     help="style prefix 예산(px). style 은 이 값의 절반까지만 쓰인다. "
