@@ -23,13 +23,16 @@ for L in ko en; do CUDA_VISIBLE_DEVICES=0 .venv/bin/python experiments/vae_recon
   --out /tmp/relfig/recon_$L.png; done
 #    - 생성: 원본 영어 pretrained(원본 VAE) vs 릴리즈(한글 VAE + 재적응 T5)
 PRE=$(ls ~/.cache/huggingface/hub/models--blowing-up-groundhogs--eruku/snapshots/*/pytorch_model.bin | head -1)
+#      style ref 는 그 언어 폰트로 즉석 렌더(--style-fonts-dir). 없으면 train_lines.json 의 혼합 스크립트
+#      라인이 style 로 뽑혀 BEFORE(영어 원본)가 영어 타깃까지 빈 줄을 낸다
+for c in "en_release assets/fonts_english" "ko_release assets/fonts_korean_v2/train"; do set -- $c
 CUDA_VISIBLE_DEVICES=0 .venv/bin/python experiments/gen_compare.py --ckpt-before "$PRE" \
-  --ckpt-after finetune_runs/eruku_short_fullmse/checkpoint_step_030000.pth \
+  --ckpt-after finetune_runs/eruku_corpusmax/checkpoint_last.pth \
   --label-before "BEFORE: original pretrained (English, original VAE)" \
   --label-after "AFTER: this release (Korean VAE + re-adapted T5)" \
   --col-labels "style reference (input)" "target (rendered in that font)" \
-  --row-label-fmt "style: {font}" "target: {text}" \
-  --cats ko_release en_release --n-rows 4 --out-dir /tmp/relfig
+  --row-label-fmt "style: {font}" "target: {text}" --style-fonts-dir $2 \
+  --cats $1 --n-rows 4 --out-dir /tmp/relfig; done
 
 # 1) VAE 먼저 (상위 repo 로드가 이걸 요구).  --figures-dir 주면 samples/ 로 올리고 카드에 삽입
 .venv/bin/python tools/hf_upload.py vae --figures-dir /tmp/relfig --push
@@ -65,7 +68,7 @@ config 의 `vae_name_or_path` 를 읽어 자동으로 붙는다.
 
 ## ⚠️ 릴리즈 클래스와 학습 클래스는 style prefix 규약이 다르다
 
-릴리즈 `get_model_inputs` 는 style latent 뒤에 SOG placeholder 열(ones) 1개를 붙이고,
+원본 릴리즈 `get_model_inputs` 는 style latent 뒤에 SOG placeholder 열(ones) 1개를 붙였고(2026-10-23 패치로 제거 — 아래),
 `generate` 가 반환 전에 style prefix 를 **내부에서 잘라낸다**. 로컬은 안 붙이고 안 자르며
 `infer.show.gen_arr` 가 special 시퀀스의 첫 SOG 로 자른다. 둘을 섞어(릴리즈 출력에 gen_arr
 크롭을 겹쳐) 쓰면 이중 크롭으로 생성물이 날아간다 — 릴리즈 경로는 `generate_handwriting`
@@ -104,3 +107,20 @@ bbox 크롭 smoke test 통과. 발행 후 `./inference.sh hf` 재실행으로 ec
 업로드하는 `modeling_eruku.py` 에는 **ink bbox 크롭**(`generate_handwriting(bbox_crop=True)`)을
 추가했다. 실제 스캔 손글씨의 여백이 latent std 를 폰트의 6~29배로 튀겨 runaway/blank 를
 만드는 문제(→ [`VAE_ROBUSTNESS.md`](VAE_ROBUSTNESS.md) ②)의 추론측 해결책이다.
+
+### (2026-10-23 수정) style 뒤 ones placeholder 열 제거 — corpusmax 가 이것에 흔들렸다
+
+원본 `get_model_inputs` 의 ones 열은 T5 에 **이미지 토큰으로**(`query_emb(ones)`) 들어간다. 학습엔 이 열이
+없다(SOG 자리엔 `sog` 임베딩). s30000 은 견뎠지만 corpusmax s45000 을 올리려고 재보니 w/ T_s 에서
+style VAE 샘플링 노이즈(시드)에 따라 같은 문장이 빈 줄(17px)·정상·폭주(4096px)로 갈렸다.
+로컬 경로는 5 시드 모두 같은 폭. `patch_modeling` ⑤ 가 이 열을 빼고, ③ 의 `keep[n_style-1]=False` 도 함께 지운다.
+
+릴리즈 경로 PP-OCR CER(150문장, cfg 1.0, echo, `generate_handwriting` 그대로):
+
+| | w/ T_s | w/o T_s |
+|---|---|---|
+| s30000 (이전 발행본, ③④ 패치) | 0.0200 | 0.0200 |
+| s45000, ⑤ 없이 | 0.0738 (빈 줄 3·폭주 1) | 0.0083 |
+| **s45000, ⑤ 적용 = 현재 발행본** | **0.0160** | **0.0080** |
+| (정답 렌더 = 리더 바닥) | 0.0089 | |
+

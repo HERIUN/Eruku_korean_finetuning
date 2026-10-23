@@ -40,7 +40,7 @@ sys.path.insert(0, str(HERE))
 # transformers import 전에(=여기서) 쓰기 가능한 경로로 고정한다.
 os.environ.setdefault("HF_MODULES_CACHE", f"/tmp/hf_modules_{os.getuid()}")
 
-DEF_CKPT = HERE / "finetune_runs/eruku_short_fullmse/checkpoint_step_030000.pth"
+DEF_CKPT = HERE / "finetune_runs/eruku_corpusmax/checkpoint_last.pth"   # s45000 (VAE 는 s30000 과 동일)
 DEF_VAE_SRC = HERE / "finetune_runs/vae_korean_full_mse/vae_s28000"
 DEF_MODEL_REPO = "HERIUN/eruku_korean"
 DEF_VAE_REPO = "HERIUN/emuru_vae_korean"
@@ -203,6 +203,30 @@ PATCH_TRIM_NEW = """        # (No longer skips a leading ink run: the style pref
 """
 
 
+# ⑤ 원본 get_model_inputs 는 style latent 뒤에 ones 열(SOG placeholder)을 붙여 T5 에 **이미지 토큰으로**
+# 넣는다. 학습(models/eruku.py get_model_inputs, gen 없는 추론 경로)엔 이 열이 없다 — SOG 자리엔
+# sog 임베딩이 들어간다. s30000 은 이 OOD 열을 견뎠지만 corpusmax s45000 은 style VAE 샘플링
+# 노이즈에 따라 빈 줄/폭주로 갈렸다(150문장 PP-OCR w/ T_s 0.074, 빈 줄 3·폭주 1 → 제거 후 0.016, w/o T_s 0.008).
+# ③ 이 이 열을 디코딩에서 빼던 줄도 함께 없앤다(③ 적용 직후 또는 이미 ③ 이 들어간 발행본 모두에 걸림).
+PATCH_PH_OLD = """            # Style image embeddings + SOG marker
+            sample_embeds = torch.cat([
+                style_img_embeds[el, :, :, :sl // 8],
+                torch.ones(1, 8, 1).to(self.T5.device),  # SOG placeholder
+            ], dim=-1)
+"""
+PATCH_PH_NEW = """            # Style image embeddings only. (No ones "SOG placeholder" column: training
+            # never feeds one; the SOG embedding is appended in generate() instead.)
+            sample_embeds = style_img_embeds[el, :, :, :sl // 8]
+"""
+PATCH_PH_CTX_OLD = """        # 0=SOG, 1=EOG); the last style column is the ones SOG placeholder from
+        # get_model_inputs, not an image latent.
+"""
+PATCH_PH_CTX_NEW = """        # 0=SOG, 1=EOG).
+"""
+PATCH_PH_KEEP_OLD = """        keep[n_style - 1] = False
+"""
+
+
 def _apply_patch(src: str, name: str, marker: str, steps) -> str:
     """치환 목록 steps=[(old, new)…] 를 원자적으로 적용.
 
@@ -238,6 +262,11 @@ def patch_modeling(src: str) -> str:
     ])
     src = _apply_patch(src, "trim_white 앞 잉크 보존", "No longer skips a leading ink run", [
         (PATCH_TRIM_OLD, PATCH_TRIM_NEW),
+    ])
+    src = _apply_patch(src, "style 뒤 ones placeholder 제거", "No ones \"SOG placeholder\"", [
+        (PATCH_PH_OLD, PATCH_PH_NEW),
+        (PATCH_PH_CTX_OLD, PATCH_PH_CTX_NEW),
+        (PATCH_PH_KEEP_OLD, ""),
     ])
     return src
 
@@ -650,37 +679,38 @@ img.save("out.png")
 
 ## Results
 
-CER measured with a Korean HTR reader (floor on font renders ~0.00; easyocr saturates at
-0.236 even on Korean ground truth and cannot be used). n=100 sentences split into length
-buckets, cfg=1.0, coherent sentences, seen fonts.
+CER measured with a Korean HTR reader on n=300 coherent sentences, cfg=1.0, seen fonts,
+fixed eval set (`eval/htr_cer.py --coherent`). The mean is dominated by a few runaway lines,
+so the median and the runaway rate (lines with CER > 1, i.e. generation that never stops)
+are the numbers to read.
 
-| bucket | decoder-only VAE | full VAE, before re-adaptation | **this model** |
+| | mean | median | runaway |
 |---|---|---|---|
-| Korean, all | 0.203 | 0.211 | **{KO_ALL}** |
-| Korean, short (1-3 words) | 0.497 | 0.540 | **{KO_SHORT}** |
-| Korean, mid (4-8 words) | — | — | {KO_MID} |
-| Korean, long (9-15 words) | — | — | {KO_LONG} |
-| English, all | 0.084 | 0.056 | **{EN_ALL}** |
+| VAE ceiling (encode -> decode of the target render) | 0.031 | 0.000 | 0.3% |
+| previous release (step 30000, 83 Korean fonts, 941-line corpus) | 0.120 | 0.026 | 1.3% |
+| **this model** (step {STEPS}, 12,951 fonts, 50,941-line corpus) | **0.069** | **0.000** | **0.3%** |
+| short strings (1-3 words), previous -> this | 0.280 -> **0.142** | 0.000 | 4.2% -> **1.1%** |
 
-Two things had to happen together: the Korean VAE raised the reconstruction ceiling
-(roundtrip MSE -83%), and a short-text-weighted re-adaptation of T5 closed the gap to that
-ceiling — short Korean strings were the actual bottleneck (CER 0.54 -> {KO_SHORT}).
+English (n=300): 0.034 -> 0.036, median 0.000 for both — English is kept.
+Runaway on this set is down to the VAE ceiling: scaling the natural-sentence corpus 35x taught
+the model where a line ends.
 {FIGURES}
 
 ## How it was trained
 
 English pretrained -> Korean (`--english-frac 0.15` to hold English) -> VAE swap
-(`--reset-vae`) + re-adaptation with short-text emphasis, {STEPS} optimizer steps total.
-Data is synthesized online: fonts act as writers (83 Korean handwriting/display + 177 Latin),
-text is sampled from a Korean corpus, rendered and augmented per sample, so every sample is
+(`--reset-vae`) + re-adaptation with short-text emphasis (30000 steps), then 15000 more steps
+on 12,951 fonts and a 50,941-line natural-sentence corpus ({STEPS} optimizer steps total).
+Data is synthesized online: fonts act as writers, text is sampled from the corpus, rendered and augmented per sample, so every sample is
 unique. Backbone: T5-large + ByT5 byte tokenizer (byte-level input handles Hangul without a
 Korean vocab), frozen VAE.
 
 ## Limitations
 
-- **Short strings are still the weak spot** (CER {KO_SHORT} vs {KO_LONG} for long lines) —
+- **Short strings are still the weak spot** (mean CER 0.142 vs 0.069 overall) —
   fewer latent columns means less context for the autoregressive decoder.
-- Unseen extreme display/brush fonts degrade; the training set has 99 fonts, upstream had ~100k.
+- On unseen fonts the VAE, not this model, is now the bottleneck: the remaining error sits at
+  the VAE reconstruction ceiling.
 - The VAE snaps ink density to crisp black, so it does not preserve faint/pencil strokes
   (prototype collapse; see `docs/VAE_ROBUSTNESS.md` in the repo).
 - Long **English** lines are weaker than the original English model — Korean is the target here.
@@ -789,9 +819,7 @@ def cmd_model(args):
                        f"![English generation]({_url(args.repo, figs['gen_en'])})\n\n")
 
     card = MODEL_CARD.replace("{FIGURES}", "".join(sec) if sec else "")
-    for k, v in {"MODEL_REPO": args.repo, "VAE_REPO": args.vae_repo, "STEPS": str(step),
-                 "KO_ALL": args.ko_all, "KO_SHORT": args.ko_short, "KO_MID": args.ko_mid,
-                 "KO_LONG": args.ko_long, "EN_ALL": args.en_all}.items():
+    for k, v in {"MODEL_REPO": args.repo, "VAE_REPO": args.vae_repo, "STEPS": str(step)}.items():
         card = card.replace("{" + k + "}", str(v))
     (out / "README.md").write_text(card, encoding="utf-8")
 
@@ -802,8 +830,7 @@ def cmd_model(args):
         # 구 revision 의 pytorch_model.bin 이 남으면 weight 파일 2개가 공존 → 삭제
         dele = None if args.bin else ["pytorch_model.bin"]
         _push(_api(args.token), out, args.repo,
-              f"Update to full-VAE combo (T5 step {step} + Korean VAE); "
-              f"add ink-bbox style crop; crop the style prefix at the real SOG column",
+              args.message or f"Update weights to step {step}",
               delete_patterns=dele)
     else:
         print("[model] dry-run — 업로드는 --push")
@@ -923,6 +950,7 @@ def main():
     m.add_argument("--figures-dir", default=None,
                    help="카드에 넣을 생성 비교 figure 디렉토리(gencmp_{ko,en}_release.png). "
                         "experiments/gen_compare.py --cats ko_release en_release 로 생성")
+    m.add_argument("--message", default=None, help="HF 커밋 메시지")
     m.add_argument("--bin", action="store_true", help="safetensors 대신 pytorch_model.bin 으로 저장")
     m.add_argument("--verify-cer", action="store_true",
                    help="변환본을 공개 API 로 돌려 한글 CER 측정 + bbox 크롭 smoke test (GPU 필요)")
@@ -931,10 +959,6 @@ def main():
     m.add_argument("--cer-max", type=float, default=0.20, help="이 CER 을 넘으면 abort")
     m.add_argument("--device", default="cuda")
     m.add_argument("--max-new", type=int, default=480)
-    # 모델카드 수치 (eval/htr_cer.py, n=100, cfg=1.0)
-    m.add_argument("--ko-all", default="0.127"); m.add_argument("--ko-short", default="0.286")
-    m.add_argument("--ko-mid", default="0.049"); m.add_argument("--ko-long", default="0.059")
-    m.add_argument("--en-all", default="0.045")
     m.set_defaults(func=cmd_model)
 
     args = ap.parse_args()
