@@ -454,8 +454,8 @@ T_s = style 이미지의 전사(style text). w/ = 전사를 줌, w/o = style 이
   모델이 아니라 프로토콜 차이(정답 길이 상한 없음 → 공개 가중치 단어 생성 ~22% 폭주, 단어 style). lines 는 FID 가 약 4 높게 남는다
   — 공개 스크립트(`emuru_pp` 모듈 누락)와 논문 실행 설정의 차이로 본다.
 - **한글 파인튜닝이 영어 실제 손글씨를 깎지 않는다.** 두 프로토콜 모두 corpusmax 가 HWD·ΔCER 에서 공개 가중치 이상이고,
-  words 는 폭주가 1% 로 줄어 크게 앞선다. upstream lines FID 35.29 만 예외 — 원본 저장이 회색을 검정으로 누르는데 corpusmax 출력이
-  회색 톤이 많아 손해를 더 보는 것으로 추정.
+  words 는 폭주가 1% 로 줄어 크게 앞선다. upstream lines FID 35.29 만 예외 — 원본 저장이 회색을 검정으로 누르는데([아래 표 '저장' 행](#평가-프로토콜-우리-vs-원본upstream) — ours 는 정상 변환으로 고침)
+  corpusmax 출력이 회색 톤이 많아 손해를 더 보는 것으로 추정(미검증 — 같은 표의 크롭·`trim_white` 차이도 후보).
 - **w/o T_s**(style 전사 없이): corpusmax 가 공개 가중치보다 확실히 강하다(lines FID 21.23 vs 28.67). 논문 w/o 행보다도 BFID 가 낫다.
 - IAM 에서는 TrOCR 만 쓴다. 한글 독립 리더 PP-OCRv6 ko(`eval/ppocr_rec.py`)는 영어 손글씨를 못 읽는다(실제 라인 CER 0.356).
 
