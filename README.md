@@ -417,7 +417,7 @@ writer 다양성이 최대 한계라([결과 요약](#결과-요약)) 폰트 확
 | VAE 강건성 | 실제 스캔 손글씨는 **여백이 latent std 를 6~29배**로 튀겨 runaway → ink bbox 크롭 필요(재학습 불필요) | [VAE_ROBUSTNESS.md](docs/VAE_ROBUSTNESS.md) |
 | 종성 획 손실 | 겹받침 음절정확도가 홑받침보다 **22%p** 낮다. 원인은 받침 개수가 아니라 **글리프 밀도**(조사 진행 중) | [JONGSEONG_STROKE_LOSS.md](docs/JONGSEONG_STROKE_LOSS.md) |
 | 지표 선택 | 픽셀 지표(MSE/SSIM)는 글자 정렬오차에 민감·언어간 비교 부적절. **한글 주 지표는 HTR CER**(`eval/htr_cer.py`) | [§2](docs/EXPERIMENTS.md) |
-| IAM 공식 벤치 | upstream 프로토콜로 논문 수치 재현(words 81.0/62.7 vs 논문 79.7/63.3). 한글 파인튜닝이 영어 실제 손글씨를 **안 깎는다** — corpusmax 가 두 프로토콜 모두 HWD·ΔCER 에서 공개 가중치 이상, words 는 크게 앞섬 | [아래](#iam-공식-벤치마크-shtg-iam) |
+| IAM 공식 벤치 | upstream 프로토콜로 논문 수치 재현(words 81.0/62.7 vs 논문 79.7/63.3). 한글 파인튜닝이 영어 실제 손글씨를 **안 깎는다** — corpusmax 가 두 프로토콜 모두 HWD·ΔCER 에서 공개 가중치 이상, words 는 크게 앞섬. 단 이전 best s30000 보다는 words FID 가 나쁘다(60.6 vs 41.2, [§9](docs/EXPERIMENTS.md)) | [아래](#iam-공식-벤치마크-shtg-iam) |
 
 **현재 best 체크포인트** (= HF 릴리즈 가중치): `finetune_runs/eruku_corpusmax/checkpoint_last.pth` (s45000)
 (한글 seen 평균 0.069 / 중앙값 0.000 / 폭주율 0.3%, 단문 0.142, 영어 0.036 — n=300, cfg=1.0, coherent, HTR 리더.
