@@ -27,6 +27,7 @@ from pathlib import Path
 import numpy as np
 import torch
 from PIL import Image, ImageDraw, ImageFont
+import diffusers
 from diffusers import AutoencoderKL
 
 from common import REPO as HERE, load_line_x11, roundtrip
@@ -86,6 +87,26 @@ def render64_with_spans(font_path, text, size=72, pad=14):
     return load_line_x11(arr, h=H), spans, w64      # 64px 정규화 + [-1,1] + 폭 8배수 패딩
 
 
+FLUX = {"flux1": ("AutoencoderKL", "black-forest-labs/FLUX.1-Fill-dev"),
+        "flux3": ("AutoencoderKLFlux2", "black-forest-labs/flux-3-image-klein-base")}
+
+
+def load_vae(p):
+    if p in FLUX:
+        cls, repo = FLUX[p]
+        return getattr(diffusers, cls).from_pretrained(repo, subfolder="vae")
+    return AutoencoderKL.from_pretrained(p)
+
+
+def roundtrip_any(lbl, vae, x, dev):
+    """FLUX 는 16 배수 흰 패딩 + RGB 평균(InkSpire experiments/vae_recon.py 와 같음), 그 외는 common.roundtrip."""
+    if lbl not in FLUX:
+        return roundtrip(vae, x, dev)
+    w = x.shape[-1]
+    x = torch.nn.functional.pad(x, (0, -w % 16), value=1.0).repeat(1, 3, 1, 1).to(dev)
+    return vae.decode(vae.encode(x).latent_dist.mode()).sample.clamp(-1, 1).mean(1, keepdim=True)[..., :w].cpu()
+
+
 def to01(t):
     return ((t[0, 0] + 1) / 2).numpy()
 
@@ -128,6 +149,7 @@ def main():
     ap.add_argument("--vae", default=str(HERE / "finetune_runs/vae_korean_full_mse/vae_s28000"))
     ap.add_argument("--vae-base", default="blowing-up-groundhogs/emuru_vae",
                     help="비교용 원본(영어) VAE. 빈 문자열이면 생략")
+    ap.add_argument("--flux", nargs="*", default=[], choices=list(FLUX), help="같이 잴 FLUX VAE")
     ap.add_argument("--fonts-train", default=str(HERE / "assets/fonts_korean_v2/train"))
     ap.add_argument("--fonts-test", default=str(HERE / "assets/fonts_korean_v2/test"))
     ap.add_argument("--n-fonts", type=int, default=8, help="train/test 각각에서 쓸 폰트 수")
@@ -148,8 +170,8 @@ def main():
     print(f"[setup] lines={len(lines)} fonts={len(fonts)} "
           f"({sum(t=='train' for _, t in fonts)} train / {sum(t=='test' for _, t in fonts)} test)")
 
-    models = [("korean", args.vae)] + ([("base", args.vae_base)] if args.vae_base else [])
-    vaes = [(lbl, AutoencoderKL.from_pretrained(p).to(dev).eval()) for lbl, p in models]
+    models = [("korean", args.vae)] + ([("base", args.vae_base)] if args.vae_base else []) + [(f, f) for f in args.flux]
+    vaes = [(lbl, load_vae(p).to(dev).eval()) for lbl, p in models]
 
     acc = defaultdict(list)      # (model, tag, group) → [stats]
     per_jong = defaultdict(list)  # (model, 종성문자) → [miss]
@@ -161,7 +183,8 @@ def main():
                 continue
             gt = to01(x)
             for lbl, vae in vaes:
-                rec = to01(roundtrip(vae, x, dev))
+                with torch.no_grad():
+                    rec = to01(roundtrip_any(lbl, vae, x, dev))
                 for ch, sx0, sx1 in spans:
                     if not (0xAC00 <= ord(ch) <= 0xD7A3):
                         continue
