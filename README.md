@@ -412,7 +412,7 @@ writer 다양성이 최대 한계라([결과 요약](#결과-요약)) 폰트 확
 |---|---|---|
 | 학습률 | 영어 pretrained init 에서 **lr 5e-5 발산**(virtual batch 256 기준 1e-4). lr 은 virtual batch 에 맞출 것 | [§1](docs/EXPERIMENTS.md) |
 | 한글 fidelity 상한 | 동결 VAE 의 **한글 재구성이 하드상한** — 한글 오차가 영어의 **~12배**. 학습을 늘려도 안 넘는다 | [§3](docs/EXPERIMENTS.md) |
-| VAE 한글 적응 | `--train-part full` + `--htr-weight 0`(pure-L1) 이 최선. roundtrip MSE **−83%**. pyramid/HTR/logvar 항은 이득 없음 | [§4](docs/EXPERIMENTS.md) |
+| VAE 한글 적응 | `--train-part full` 로 roundtrip MSE **−83%**. **HTR loss 는 켠다**(끄면 MSE 는 좋아지나 CER 2배·ㅇ↔ㅁ 혼동). 12,951폰트 + HTR 이 손글씨 CER 최선. pyramid/logvar 는 이득 없음 | [§4·§10·§11](docs/EXPERIMENTS.md) |
 | Eruku 재적응 | full VAE 는 latent 가 이동 → T5 재적응 필수. 단문강조 재적응으로 한글 CER **0.211 → 0.127**, 단문 **0.54 → 0.29** | [§5](docs/EXPERIMENTS.md) |
 | VAE 강건성 | 실제 스캔 손글씨는 **여백이 latent std 를 6~29배**로 튀겨 runaway → ink bbox 크롭 필요(재학습 불필요) | [VAE_ROBUSTNESS.md](docs/VAE_ROBUSTNESS.md) |
 | 종성 획 손실 | 겹받침 음절정확도가 홑받침보다 **22%p** 낮다. 원인은 받침 개수가 아니라 **글리프 밀도**(조사 진행 중) | [JONGSEONG_STROKE_LOSS.md](docs/JONGSEONG_STROKE_LOSS.md) |
