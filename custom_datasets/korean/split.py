@@ -397,7 +397,6 @@ def model_style_recon(model, style_img, gen_img, max_img_len):
 
     반환: (복원 grayscale [64,W'], 복원폭 px, 원본 style 폭 px)
     """
-    from einops import rearrange
     with torch.no_grad():
         mi = model.get_model_inputs([style_img], [gen_img],
                                     int(style_img.shape[-1]), int(gen_img.shape[-1]), max_img_len)
@@ -406,8 +405,8 @@ def model_style_recon(model, style_img, gen_img, max_img_len):
         sog = (sp == 0).nonzero().flatten()
         end = int(sog[0].item()) if len(sog) else int((sp == 2).sum().item())
         end = max(1, end)
-        lat = rearrange(emb[:end], 'w (c h) -> 1 c h w', c=1, h=8).to(model.vae.device)
-        img = model.vae.decode(lat).sample        # [1,C,64,end*8] ~[-1,1]
+        lat = model.z_rearrange(emb[:end][None].to(model.vae.device))   # [1,c,8,end]
+        img = model._vae_decode(lat)              # [1,1,64,end*8] ~[-1,1]
     im = ((img.clamp(-1, 1) + 1) / 2)[0]
     if im.shape[0] > 1:
         im = im.mean(0, keepdim=True)

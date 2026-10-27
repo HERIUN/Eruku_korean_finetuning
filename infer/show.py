@@ -207,6 +207,8 @@ def load_model(ckpt, device, vae_checkpoint=None):
     # ★ VAE 는 state 를 본 뒤에 만든다 — 발행본은 config 가 페어 한글 VAE 를 가리키므로,
     #   먼저 기본 VAE 를 받아놓으면 어차피 vae.* 로 덮일 가중치를 헛으로 내려받게 된다.
     vae_ck = vae_checkpoint or hf_vae or "blowing-up-groundhogs/emuru_vae"
+    if "query_emb.weight" in st and st["query_emb.weight"].shape[1] == 128 and not vae_checkpoint:
+        vae_ck = "flux1"   # §13: FLUX.1 VAE 로 학습한 ckpt (열당 latent 128차원)
     model = Emuru(t5_checkpoint="google-t5/t5-large", vae_checkpoint=vae_ck).to(device)
     model.alpha = 1.0
     if any(k.startswith("module.") for k in st):

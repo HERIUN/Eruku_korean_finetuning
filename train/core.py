@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 
 import torch
+from einops import rearrange
 import yaml
 from torch.utils.data import DataLoader
 
@@ -76,6 +77,9 @@ def make_parser():
                    help="학습 중 text 를 uncond 로 drop 할 확률 (>0 이어야 inference CFG 동작)")
     p.add_argument("--resume", default=None,
                    help="체크포인트에서 이어 학습 (model+optimizer+step 복원, eruku-pretrained 무시)")
+    p.add_argument("--sched-sampling", type=float, default=0.0,
+                   help="scheduled sampling: SOG 뒤 이미지 토큰 입력을 모델 자신의 1-step 예측으로 바꿀 확률의 상한 "
+                        "(샘플마다 U(0, 값)). 0=끔. 자유 생성에서 자기 예측이 쌓이며 생기는 배경 회색화·조기 종료 대응(§13)")
     p.add_argument("--style-text-dropout", type=float, default=0.0,
                    help="논문 p_drop (Phase2): style text(T_s)만 비울 확률. gen text 는 유지. 논문 0.10")
     p.add_argument("--online-split", action="store_true",
@@ -415,6 +419,12 @@ def train(args):
         if args.reset_vae:
             n0 = len(state); state = {k: v for k, v in state.items() if not k.startswith("vae.")}
             print(f"  [reset-vae] pretrained vae.* {n0-len(state)}키 strip → --vae-checkpoint 유지")
+        # latent 차원이 다른 VAE(§13 flux1)로 갈아끼우면 query_emb/t5_to_vae 크기가 달라진다 → 그 키만 새로 초기화
+        own = model.state_dict()
+        bad = [k for k, v in state.items() if k in own and own[k].shape != v.shape]
+        if bad:
+            print(f"  [shape] 크기 불일치 {len(bad)}키는 새로 초기화: {bad}")
+            state = {k: v for k, v in state.items() if k not in bad}
         missing, unexpected = model.load_state_dict(state, strict=False)
         print(f"  missing={len(missing)}, unexpected={len(unexpected)}")
         if missing[:3]:
@@ -653,11 +663,22 @@ def train(args):
                 if args.style_text_dropout > 0:
                     style_text = ["" if random.random() < args.style_text_dropout else s
                                   for s in style_text]
+                input_vae = None
+                if args.sched_sampling > 0:
+                    # 정답 문맥으로 1-step 예측을 한 번 뽑고(no grad), 생성 구간 이미지 토큰 일부를 그 예측으로 바꿔 입력
+                    with torch.no_grad():
+                        _, pred = model.forward(decoder_inputs_embeds_vae, specials, style_text, sample["gen_text"])
+                    pred = rearrange(pred, 'b c h w -> b w (c h)')          # z_rearrange 의 역 (열 i = 입력 열 i 의 예측)
+                    gen = (specials == 2) & ((specials == 0).cumsum(1) > 0)  # SOG 뒤 이미지 토큰
+                    p_ss = torch.rand(gen.size(0), 1, device=device) * args.sched_sampling
+                    pick = gen & (torch.rand(gen.shape, device=device) < p_ss)
+                    input_vae = torch.where(pick[..., None], pred, decoder_inputs_embeds_vae)
                 out = model.forward(
                     decoder_inputs_embeds_vae=decoder_inputs_embeds_vae,
                     specials=specials,
                     style_text=style_text,
                     gen_text=sample["gen_text"],
+                    input_vae=input_vae,
                 )
                 losses, pred_latent = out
                 loss = losses["loss"]

@@ -71,6 +71,12 @@ def _warn_style_clipped(sl_px: int, max_img_len: int):
           f"학습 run 과 같은 값을 쓰는 것이 원칙입니다.")
 
 
+# §13: InkSpire 의 FLUX VAE (latent 16ch, /8) — --vae-checkpoint flux1 로 고른다.
+# 높이 64 라인 기준 열당 latent = 16ch × 8행 = 128차원 (emuru VAE 는 1ch × 8 = 8).
+# FLUX latent 는 (z - shift) * scale 로 단위분산에 맞춘 공간에서 T5 가 회귀한다.
+FLUX_VAES = {"flux1": "black-forest-labs/FLUX.1-Fill-dev"}
+
+
 class Emuru(torch.nn.Module):
     def __init__(self, t5_checkpoint='google-t5/t5-base',
                  vae_checkpoint='blowing-up-groundhogs/emuru_vae',
@@ -98,9 +104,15 @@ class Emuru(torch.nn.Module):
         self.sog = torch.nn.Embedding(1, config.d_model)
         self.eog = torch.nn.Embedding(1, config.d_model)
         
-        self.vae = AutoencoderKL.from_pretrained(vae_checkpoint)
+        if vae_checkpoint in FLUX_VAES:
+            self.vae = AutoencoderKL.from_pretrained(FLUX_VAES[vae_checkpoint], subfolder="vae")
+            self.lat_shift, self.lat_scale = self.vae.config.shift_factor, self.vae.config.scaling_factor
+            channels = self.vae.config.latent_channels
+        else:
+            self.vae = AutoencoderKL.from_pretrained(vae_checkpoint)
+            self.lat_shift, self.lat_scale = 0.0, 1.0
         
-        vae_latent_dim = 8 # self.vae.config.get('latent_channels', 8)
+        vae_latent_dim = 8  # latent 행 수 (높이 64 / 8); 열당 차원 = 8 * channels
 
         self.query_emb = torch.nn.Linear(vae_latent_dim * channels * slices_per_query, config.d_model)
         self.t5_to_vae = torch.nn.Linear(config.d_model, vae_latent_dim * channels * slices_per_query)
@@ -165,7 +177,13 @@ class Emuru(torch.nn.Module):
         #   실측: single(정상[-1,1]) 로 바꿔도 생성 붕괴 없음(MSE 소폭 개선) → 제거.
         # Ensure contiguous memory layout before encode to avoid kernel issues
         img = img.contiguous()
-        return self.vae.encode(img.float()).latent_dist.sample()
+        z = self.vae.encode(img.float()).latent_dist.sample()
+        return (z - self.lat_shift) * self.lat_scale
+
+    def _vae_decode(self, z):
+        """latent([b,c,8,w]) → 1채널 이미지. FLUX 는 정규화를 되돌리고 3채널 출력을 평균낸다."""
+        x = self.vae.decode(z / self.lat_scale + self.lat_shift).sample
+        return x.mean(1, keepdim=True) if x.size(1) == 3 else x
 
     @torch.no_grad()
     def get_model_inputs(self, style_img, gen_img, style_len, gen_len, max_img_len):
@@ -229,9 +247,9 @@ class Emuru(torch.nn.Module):
                 remaining = max(64, max_img_len - sl - 16)
                 gl = max(64, min(gl, gen_img_embeds.shape[-1] * 8, remaining))
                 sample_embeds_parts.extend([
-                    torch.ones(1, 8, 1).to(self.T5.device), # SOG token placeholder
+                    torch.ones(*style_img_embeds.shape[1:3], 1).to(self.T5.device), # SOG token placeholder
                     gen_img_embeds[el,:,:,:gl//8],
-                    torch.ones(1, 8, 1).to(self.T5.device), # EOG token placeholder
+                    torch.ones(*style_img_embeds.shape[1:3], 1).to(self.T5.device), # EOG token placeholder
                 ])
                 specials_parts.extend([
                     torch.zeros(1), # SOG
@@ -242,7 +260,7 @@ class Emuru(torch.nn.Module):
             sample_embeds = torch.cat(sample_embeds_parts, dim=-1)
 
             h_dim = sample_embeds.shape[1]
-            sample_embeds = rearrange(sample_embeds, 'c h w -> w (h c)', h=h_dim, c=1)
+            sample_embeds = rearrange(sample_embeds, 'c h w -> w (c h)', h=h_dim)   # z_rearrange 와 같은 (c h) 순서
 
             decoder_inputs_embeds_list.append(sample_embeds)
             lengths_list.append(sample_embeds.size(0))
@@ -275,7 +293,8 @@ class Emuru(torch.nn.Module):
         enc = self.tokenizer(pairs, padding=True, return_tensors="pt")
         return enc["input_ids"], enc["attention_mask"]
 
-    def forward(self, decoder_inputs_embeds_vae, specials, style_text, gen_text, ce_multiplier=1.0):
+    def forward(self, decoder_inputs_embeds_vae, specials, style_text, gen_text, ce_multiplier=1.0, input_vae=None):
+        # input_vae: T5 에 넣을 latent 를 정답(decoder_inputs_embeds_vae, MSE 타깃)과 다르게 줄 때 (scheduled sampling)
         # style_img_embeds: [bs, w//8, 8, 1]
         # generate text embeddings
         
@@ -287,7 +306,7 @@ class Emuru(torch.nn.Module):
         sog = repeat(self.sog.weight, '1 d -> b d', b=decoder_inputs_embeds_vae.size(0))
         # eog = repeat(self.eog.weight, '1 d -> b d', b=decoder_inputs_embeds_vae.size(0))
 
-        decoder_inputs_embeds = self.query_emb(decoder_inputs_embeds_vae)
+        decoder_inputs_embeds = self.query_emb(decoder_inputs_embeds_vae if input_vae is None else input_vae)
         
         # Fix the indexing assignment to avoid shape mismatch
         sog_mask = (specials == 0)
@@ -336,8 +355,8 @@ class Emuru(torch.nn.Module):
         if self.alpha < 1.0:
             if self.ocr is None:
                 raise RuntimeError("alpha<1.0 (OCR loss) 사용하려면 ocr_checkpoint 필요")
-            pred_img = self.vae.decode(pred_latent).sample
-            gt_img = self.vae.decode(decoder_inputs_embeds_vae.unsqueeze(1)).sample
+            pred_img = self._vae_decode(pred_latent)
+            gt_img = self._vae_decode(self.z_rearrange(decoder_inputs_embeds_vae))
             ocr_preds = self.ocr(pred_img)
             ocr_gt = self.ocr(gt_img)
             ocr_loss = self.mse_criterion(ocr_preds, ocr_gt)
@@ -347,8 +366,8 @@ class Emuru(torch.nn.Module):
         return {'loss': loss, 'mse_loss': mse_loss, 'ce_loss': ce_loss, 'ocr_loss': ocr_loss}, pred_latent
 
     def split_characters(self, pred, gt, indices):
-        pred = self.vae.decode(pred).sample
-        gt = self.vae.decode(gt).sample
+        pred = self._vae_decode(pred)
+        gt = self._vae_decode(gt)
         img = torch.cat([gt, pred], dim=-2)
 
         curr_char = indices[0]
@@ -546,7 +565,7 @@ class Emuru(torch.nn.Module):
         """latent 열 [t,8] + special [t] → 이미지 [c,h,w]. gen_only: False=전부, True=gen 이미지 토큰만,
         "ctx"=style+이미지 토큰+EOG 를 같이 디코딩(SOG 만 뺌)하고 첫 SOG 앞 열까지 잘라냄."""
         if not gen_only:
-            return torch.clamp(self.vae.decode(self.z_rearrange(z_seq[None].to(self.vae.device))).sample, -1, 1)[0], sp
+            return torch.clamp(self._vae_decode(self.z_rearrange(z_seq[None].to(self.vae.device))), -1, 1)[0], sp
         sog = (sp == 0).nonzero().flatten()
         start = int(sog[0]) + 1 if len(sog) else n_head
         keep = (sp == 2) | (sp == 3)
@@ -557,7 +576,7 @@ class Emuru(torch.nn.Module):
             keep |= sp == 1
         if not gen.any():                                            # 이미지 토큰 0개 = 빈 결과
             return torch.ones(3, 64, 8, device=self.vae.device), sp[gen]
-        img = torch.clamp(self.vae.decode(self.z_rearrange(z_seq[keep][None].to(self.vae.device))).sample, -1, 1)[0]
+        img = torch.clamp(self._vae_decode(self.z_rearrange(z_seq[keep][None].to(self.vae.device))), -1, 1)[0]
         return img[:, :, int(keep[:start].sum()) * 8:], sp[gen]
 
     @torch.inference_mode()
@@ -600,7 +619,7 @@ class Emuru(torch.nn.Module):
             test_img = torch.cat([test_img.repeat(1,3,1,1) , special_img], dim=-2)
             return test_img
         
-        gt = torch.clamp(self.vae.decode(gt).sample, -1, 1)
+        gt = torch.clamp(self._vae_decode(gt), -1, 1)
         if type(batch['style_img_width']) == torch.Tensor:
             style_img_width = batch['style_img_width'][0]
         else:
